@@ -32,6 +32,8 @@ import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
 import { runResearcherAgent } from "./researcher.ts";
 import { runVisualMaker } from "./visual-maker.ts";
+import { isLessonAnimationRequest, type LessonAnimationRequest } from "../../core/lesson-animation.ts";
+import { planLessonAnimation } from "./animation-planner.ts";
 
 /**
  * The background job runner (contracts.ts "THE ASYNC PROTOCOL" §2–3), created
@@ -64,9 +66,10 @@ export const visualModelOverride: { current?: PiEngine } = {};
 export const pdfModelOverride: { current?: PiEngine } = {};
 
 /** The dispatch-time tool input (from src/agent/tools/jobs.ts schemas). */
-type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput | PdfToolInput | BlackboardPlan;
+type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput | PdfToolInput | BlackboardPlan | LessonAnimationRequest;
 
 export interface JobRunnerDeps {
+	animationEngineFor?: (chatId: string, automatic: boolean) => PiEngine | undefined;
 	renderBlackboard?: (plan: BlackboardPlan, options: { signal: AbortSignal; onProgress: (line: string) => void }) => Promise<BlackboardArtifact>;
 	chatStore: ChatStore;
 	jobStore: JobStore;
@@ -135,7 +138,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	 * then writes through the job store so the poll sees progress). */
 	const usageTotals = new Map<string, JobUsage>();
 
-	function makeLoopContext(jobId: string, engine: PiEngine): LoopContext {
+	function makeLoopContext(jobId: string, engine: PiEngine, controller = new AbortController()): LoopContext {
 		const chatId = jobStore.getJob(jobId)?.chatId;
 		// Provider-qualified stamp: the engine's actual model — the only
 		// thing that ran (BYOK: no config-pin fallback stamps exist).
@@ -143,7 +146,6 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		// Real-kill wiring (2026-09 abort semantics): the controller is what
 		// the abort endpoint fires (agent/subagents/aborts.ts registry); the
 		// signal rides into every model call of the loop.
-		const controller = new AbortController();
 		registerJobAbort(jobId, controller);
 		return {
 			abortSignal: controller.signal,
@@ -199,12 +201,25 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		}
 		if (job.status !== "running") return; // already finished / re-run after crash recovery
 		if (job.kind === "animation") {
-			const animationPlan = resolveInput(job, input) as BlackboardPlan | undefined;
+			const received = resolveInput(job, input);
+			const request = isLessonAnimationRequest(received) ? received : undefined;
+			let animationPlan = request?.plan ?? (request ? undefined : received as BlackboardPlan | undefined);
 			const controller = new AbortController();
 			registerJobAbort(jobId, controller);
 			try {
 				if (!jobContext(jobId)) return;
 				if (!deps.renderBlackboard) throw new Error("Animated board renderer is unavailable. Restart the application and try again.");
+				if (request && !animationPlan) {
+					const engine = deps.animationEngineFor?.(job.chatId, request.automatic);
+					if (!engine) throw new Error("Choose a teaching model in Providers before generating an animation.");
+					const missing = deps.providerKeyMissing?.(engine.model.provider, "strong");
+					if (missing) throw new Error("Connect your selected teaching provider in Settings, then try again.");
+					jobStore.updateJob(jobId, { activity: "Planning the animation" });
+					const loop = makeLoopContext(jobId, engine, controller);
+					animationPlan = await planLessonAnimation(request.context, engine, controller.signal, usage => loop.onUsage(piUsageToStep(usage)), job.chatId);
+					if (!stillRunning(jobId) || !jobContext(jobId)) return;
+					jobStore.updateJob(jobId, { input: { ...request, plan: animationPlan } });
+				}
 				const result = await deps.renderBlackboard(animationPlan as BlackboardPlan, { signal: controller.signal, onProgress: (line) => { if (stillRunning(jobId)) jobStore.updateJob(jobId, { activity: line }); } });
 				await finishJob(jobId, result);
 			} catch (error) {
@@ -212,7 +227,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 				const reason = error instanceof Error ? error.message : String(error);
 				if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
 				await finishJob(jobId, { id: "", title: typeof animationPlan?.title === "string" ? animationPlan.title : "Animated board", url: "", posterUrl: "", durationSeconds: 0, sections: [], cacheHit: false, engine: "manimgx", notes: reason });
-			} finally { unregisterJobAbort(jobId); }
+			} finally { unregisterJobAbort(jobId); usageTotals.delete(jobId); }
 			return;
 		}
 		const run = KIND_RUNNERS[job.kind];
@@ -332,8 +347,11 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			result,
 			status: failed ? "error" : "done",
 			activity: failed ? "failed" : "finished",
-			delivery: { kind: "result", status: "pending" },
+			...(!isLessonAnimationRequest(job.input) ? { delivery: { kind: "result" as const, status: "pending" as const } } : {}),
 		});
+		// On-demand boards are displayed directly under their source explanation.
+		// They must not wait behind a quiz or produce a second artifact through a wake turn.
+		if (isLessonAnimationRequest(job.input)) return;
 		// The saved result now belongs to the session. Do not keep the worker,
 		// abort registration, or temporary resources alive behind a question.
 		void deliver(buildSubagentSteer(job, result)).catch((err: unknown) => {

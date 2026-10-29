@@ -17,7 +17,7 @@ const beat = z.object({
 		if (!b.nodes?.length) ctx.addIssue({ code: "custom", message: "A flow needs nodes." });
 		const ids = new Set(b.nodes?.map(n => n.id));
 		if (ids.size !== b.nodes?.length) ctx.addIssue({ code: "custom", message: "Node identities must be unique." });
-		for (const edge of b.edges || []) if (!ids.has(edge.from) || !ids.has(edge.to) || edge.from === edge.to) ctx.addIssue({ code: "custom", message: "Connect two existing distinct nodes." });
+		for (const edge of b.edges || []) if (!ids.has(edge.from) || !ids.has(edge.to) || edge.from === edge.to) ctx.addIssue({ code: "custom", message: `In beat "${b.title}", edge ${edge.from} to ${edge.to} must connect distinct ids from this beat: ${[...ids].join(", ")}. Add any missing node to this beat, even if it appeared in a previous beat.` });
 	}
 	if (b.kind === "vectors" && (!b.a || !b.b || b.a.every(v => v === 0) || b.b.every(v => v === 0))) ctx.addIssue({ code: "custom", message: "Provide two nonzero 2D vectors." });
 });
@@ -68,31 +68,31 @@ class BlackboardLesson(m.Scene):
             caption = label(b["caption"], 25, 11.5, 80).move_to([0,-3.1,0])
             objects = [title, caption]
             trace = []
+            trace_captions = {}
+            edge_caption = None
             if b["kind"] == "flow":
                 nodes = b["nodes"]
                 positions, boxes = {}, []
-                cols = min(3, len(nodes))
                 for i,n in enumerate(nodes):
-                    row = i // cols
-                    col = i % cols if row % 2 == 0 else cols - 1 - i % cols
-                    pos = [(col-(cols-1)/2)*4.0, 1.3-row*2.6, 0]
+                    angle = math.pi - (2*math.pi*i/len(nodes)) if len(nodes) > 2 else math.pi*(1-i)
+                    pos = [4.7*math.cos(angle),1.65*math.sin(angle),0] if len(nodes)>2 else [(-2.7 if i==0 else 2.7),.3,0]
+                    if len(nodes)==1: pos=[0,.3,0]
                     positions[n["id"]] = pos
-                    rect = m.RoundedRectangle(width=3.35, height=1.35, corner_radius=.12, color=SAGE, fill_color="#e9efe4", fill_opacity=1).move_to(pos)
-                    t = label(n["label"], 27, 3.0, 24).move_to(pos)
-                    if t.height > 1.05: t.scale(1.05/t.height)
+                    rect = m.RoundedRectangle(width=2.5, height=1.05, corner_radius=.12, color=SAGE, fill_color="#e9efe4", fill_opacity=1).move_to(pos)
+                    t = label(n["label"], 25, 2.2, 22).move_to(pos)
+                    if t.height > .85: t.scale(.85/t.height)
                     boxes.append(m.VGroup(rect,t))
-                order = {n["id"]: i for i,n in enumerate(nodes)}
                 for box in boxes: trace.append(box)
                 for e in b.get("edges", []):
                     a,c = positions[e["from"]], positions[e["to"]]
-                    horizontal = abs(a[1]-c[1]) < .1
-                    sign = 1 if (c[0]-a[0] if horizontal else c[1]-a[1]) > 0 else -1
-                    start = [a[0]+sign*1.75,a[1],0] if horizontal else [a[0],a[1]+sign*.75,0]
-                    end = [c[0]-sign*1.75,c[1],0] if horizontal else [c[0],c[1]-sign*.75,0]
-                    target_step = max(order[e["from"]],order[e["to"]])
-                    trace[target_step].add(m.Arrow(start,end,color=SAGE,buff=0,stroke_width=3))
+                    dx,dy=c[0]-a[0],c[1]-a[1]
+                    boundary=min(1.25/max(abs(dx),.0001),.525/max(abs(dy),.0001))
+                    pad=.07/max(math.hypot(dx,dy),.0001)
+                    start=[a[0]+dx*(boundary+pad),a[1]+dy*(boundary+pad),0]
+                    end=[c[0]-dx*(boundary+pad),c[1]-dy*(boundary+pad),0]
                     if e.get("label"):
-                        trace[target_step].add(label(e["label"],17,2.4,22).move_to([(start[0]+end[0])/2,(start[1]+end[1])/2+.3,0]))
+                        trace_captions[len(trace)]=label(e["label"],22,10.5,70).move_to([0,-2.5,0])
+                    trace.append(m.Arrow(start,end,color=SAGE,buff=0,stroke_width=3))
             elif b["kind"] == "vectors":
                 a,c = b["a"], b["b"]
                 scale = .44
@@ -120,9 +120,14 @@ class BlackboardLesson(m.Scene):
             self.play(m.FadeIn(group),run_time=.35)
             if trace:
                 step=(b["duration"]-.7)*.7/len(trace)
-                for dot in trace: self.play(m.Create(dot),run_time=step)
+                for step_index,dot in enumerate(trace):
+                    if edge_caption is not None: self.remove(edge_caption)
+                    edge_caption=trace_captions.get(step_index)
+                    if edge_caption is not None: self.add(edge_caption)
+                    self.play(m.Create(dot),run_time=step)
                 self.wait((b["duration"]-.7)*.3)
                 group.add(*trace)
+                if edge_caption is not None: group.add(edge_caption)
             else: self.wait(b["duration"]-.7)
             if beat_index == len(P["beats"])-1: self.wait(.35)
             else:

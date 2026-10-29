@@ -63,6 +63,9 @@ import {
 } from "../core/input-events.ts";
 import { steerDelivered } from "../core/contracts.ts";
 import type {CallUsage} from "../core/contracts.ts";
+import { queueLessonAnimation, queueRequestedVisual } from "./lesson-animation.ts";
+import { trustedOllamaRequest } from "./ollama.ts";
+import { isLessonAnimationRequest } from "../core/lesson-animation.ts";
 
 /**
  * One chat turn over the server-owned native record. Framework-free (plain
@@ -95,6 +98,13 @@ function settlementErrorText(error: unknown): string {
 
 const jobRunner = createJobRunner({
 	renderBlackboard,
+	animationEngineFor: (chatId, automatic) => {
+		const saved = stores.settingsStore.readSettings();
+		const spec = resolveConversationSpec(stores.chatStore.getChat(chatId)?.settings, effectiveSettings().models.strong, Boolean(offlineSpec(saved)));
+		if (!spec) return;
+		if (automatic && !connectionBackgroundAllowed(spec.provider)) throw new Error("Automatic animation planning is paused for this provider. Click Generate animation to request it directly.");
+		return piEngineForSpec(spec, automatic);
+	},
 	chatStore: stores.chatStore,
 	jobStore: stores.jobStore,
 	deliver: deliverJobResult,
@@ -156,6 +166,22 @@ function resolveEngine(role: ModelRole): PiEngine | undefined {
 }
 
 setJobRespawn((jobId) => void jobRunner.runJob(jobId));
+
+export async function lessonAnimationPost(req: Request, chatId: string): Promise<Response> {
+	if (!trustedOllamaRequest(req)) return Response.json({ error: "Open this lesson in the application to generate an animation." }, { status: 403 });
+	if (!req.headers.get("content-type")?.startsWith("application/json")) return Response.json({ error: "JSON is required." }, { status: 415 });
+	try {
+		const raw = await req.text();
+		if (raw.length > 2048) return Response.json({ error: "Animation request is too large." }, { status: 413 });
+		const body = JSON.parse(raw);
+		if (typeof body.sourceMessageId !== "string" || body.sourceMessageId.length > 200 || (body.retry !== undefined && typeof body.retry !== "boolean")) return Response.json({ error: "Choose a saved explanation to animate." }, { status: 400 });
+		if (effectiveSettings().agent.tools.animation === false) return Response.json({ error: "Turn on Animated board in Settings, Agent, then try again." }, { status: 409 });
+		if (!stores.chatStore.getChat(chatId)) return Response.json({ error: "Lesson not found." }, { status: 404 });
+		const previous = stores.jobStore.listJobs(chatId).find(j => isLessonAnimationRequest(j.input) && j.input.sourceMessageId === body.sourceMessageId && j.input.intentMessageId === body.sourceMessageId);
+		const job = queueLessonAnimation({ ...stores, spawn: id => void jobRunner.runJob(id) }, chatId, body.sourceMessageId, { retry: body.retry, automatic: false, ...(previous ? { intentMessageId: body.sourceMessageId } : {}) });
+		return Response.json({ job }, { status: job.status === "running" ? 202 : 200, headers: { "cache-control": "no-store" } });
+	} catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Could not start the animation." }, { status: 400 }); }
+}
 
 /** The route-facing entry: parse {chatId, input} and run one turn. */
 export async function handleChatRequest(
@@ -576,6 +602,14 @@ export async function handleChatInput(
 				// refolds this on the client after the turn settles. The
 				// provenance message is the turn's FIRST new assistant message.
 				const response = stamped.find((m) => (m as { role?: string }).role === "assistant");
+				if (!isAborted && !buildAgent && input.type !== "steers" && effective.agent.tools.animation !== false) {
+					try {
+						// Storage assigns canonical message ids. Use those ids for the inline anchor.
+						const saved = stores.chatStore.getChat(chatId)?.messages ?? [];
+						queueRequestedVisual({ ...stores, spawn: id => void jobRunner.runJob(id) }, chatId, new Set(saved.slice(merged.length).map(m => m.id)));
+					}
+					catch (error) { console.error(`[chat ${chatId}] animation dispatch failed:`, error); }
+				}
 				if (response && steps.length > 0) {
 					stores.chatStore.appendTurnUsage(chatId, {
 						id: turnUsageId,

@@ -1,5 +1,5 @@
 import { getChat, stores } from "@/src/server";
-import { lessonExport, blackboardPlanSchema } from "@/src/core";
+import { lessonExport, blackboardPlanSchema, isLessonAnimationRequest } from "@/src/core";
 
 export const dynamic = "force-dynamic";
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
@@ -8,7 +8,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 	const chat = getChat(id);
 	if (!chat) return Response.json({ error: "Lesson not found" }, { status: 404 });
 	const boards = stores.jobStore.listJobs(id).filter(job => job.kind === "animation" && job.status === "done").flatMap(job => {
-		const parsed = blackboardPlanSchema.safeParse(job.input);
+		const parsed = blackboardPlanSchema.safeParse(isLessonAnimationRequest(job.input) ? job.input.plan : job.input);
 		return parsed.success ? [parsed.data] : [];
 	});
 	const { filename, markdown } = lessonExport(chat, boards);

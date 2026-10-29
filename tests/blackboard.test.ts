@@ -26,7 +26,7 @@ test("compiler keeps hostile labels as JSON data, and reveals teaching steps pro
 	const source=compileBlackboardScene(plan);
 	assert.match(source,/P = json.loads\(/);
 	assert.ok(!source.includes('\n__import__'));
-	assert.match(source,/for dot in trace: self.play\(m.Create\(dot\)/);
+	assert.match(source,/for step_index,dot in enumerate\(trace\)/);
 	assert.match(source,/self.clear\(\)/);
 	assert.deepEqual(blackboardSections(plan),[{title:"Retrieve evidence",start:0,end:4}]);
 });

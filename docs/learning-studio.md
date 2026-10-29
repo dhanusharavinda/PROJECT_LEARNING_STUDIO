@@ -4,7 +4,7 @@ Learning Studio is a separate Windows desktop application. LearnHarness remains 
 
 ## First use
 
-Run `dist/Learning Studio-0.4.0-studio.2-x64-setup.exe` from this project to install the application. The installer lets you choose a location and includes its own Python renderer. A separate system Python installation is not required.
+Run `dist/Learning Studio-0.4.0-studio.3-x64-setup.exe` from this project to install the application. The installer lets you choose a location and includes its own Python renderer. A separate system Python installation is not required.
 
 ### Offline learning
 
@@ -38,6 +38,12 @@ LearnHarness owns the conversation, prerequisite assessment, practice, saved les
 
 ## A RAG lesson
 
+Explicit requests such as **Teach RAG visually** or **Generate an animation for this** now trigger a saved animation job even if the teacher does not choose the animation tool. This works in Teaching and Practice, including while a question is waiting for an answer. A request to animate a concept should not become a Manim programming exam. It uses the current lesson context and the lesson's selected model, including offline Ollama. Automatic subscription-provider calls respect that connection's background-use preference. If those calls are disabled, the inline error offers a direct manual request instead.
+
+Each saved explanation has a compact **Generate animation** action. The action becomes progress feedback and then a playable video in the same place. Repeated clicks share a running job, and finished media remains available after reopening the lesson. A failure offers **Retry animation**. These direct boards do not wake the teacher, duplicate the video elsewhere, or require completing a quiz before playback. A saved validated plan can be reused after an interrupted render without another model call. Native teacher-dispatched boards retain their existing follow-up teaching behavior.
+
+Rendering runs locally without a per-render API fee. Planning can use the selected cloud model and incur provider charges. Offline Ollama planning has no API charge, but still uses the computer's resources. Plans stay bounded to short boards, with no narration or paid fallback.
+
 Ask: **Explain RAG. Check whether I understand embeddings first, then animate indexing separately from retrieval and answering.**
 
 The teacher first establishes prerequisites, explains the concept, and can request an `animation` job while continuing the lesson. Its structured plan contains the actual concept labels, connections, captions, and teaching beats. ManimGX inspects the layout and renders it locally. The resulting card provides standard playback, chapter jumps, MP4 download, and **Check my understanding**. A failed render reports the failure and offers **Ask teacher to retry**. The activity dock supports canceling background work. Identical successful scene plans reuse validated saved media.
@@ -49,6 +55,18 @@ RAG indexing should show documents, chunks, embeddings, and an index. Query-time
 The first integrated tool supports multi-beat flows, two-dimensional vectors with computed cosine similarity, gradient descent on a specified quadratic, and text explanation boards. Plans are bounded to eight beats and sixty seconds. Flow references and numeric bounds are checked before rendering. The compiler generates fixed Python from validated data; the model does not receive arbitrary Python or shell execution. This integration does not expose every ManimGX API or promise arbitrary three-dimensional simulations.
 
 The app retains existing interactive HTML demos and SVG figures. A slider-driven experiment can use a demo, a static spatial figure can use SVG, and an ordered animated explanation can use ManimGX. An animation is not required for every answer.
+
+## Available visual formats
+
+| Format | Best use | Example request |
+| --- | --- | --- |
+| Interactive HTML demo | Sliders, simulations, sampling and experiments | Build a demo where I adjust chunk size and retrieval threshold. |
+| ManimGX animation | A process or transformation revealed in steps | Teach RAG visually with separate indexing and query-time stages. |
+| Static SVG figure | Precise plots, coordinates, geometry and vectors | Draw two vectors with their angle and projections. |
+| Inline Mermaid diagram | Flows, architecture, relationships and sequences | Show a sequence diagram of a RAG request. |
+| Rendered mathematics | Equations and worked calculations | Work through cosine similarity numerically. |
+
+The integrated ManimGX scene types are flows, two-dimensional vectors, gradient descent on x squared, and text explanation boards. Other ManimGX APIs and arbitrary Python scenes are not exposed by this integration. Images and PDFs can supply lesson material, but there is no built-in generative-image service.
 
 ## Save material into Synapse
 

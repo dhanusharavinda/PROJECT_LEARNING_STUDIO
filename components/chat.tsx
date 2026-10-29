@@ -19,6 +19,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { LiveToolCard } from "@/components/artifacts/live-tool-card";
+import { LessonAnimationAction } from "@/components/artifacts/lesson-animation";
 import { Separator } from "@/components/ui/separator";
 import { AnsweredCard } from "@/components/answered-card";
 import { artifactRenderers } from "@/components/artifacts";
@@ -1516,6 +1517,7 @@ export function Chat({
 												<div className="lh-prose whitespace-pre-wrap text-foreground">
 													<PathText text={m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")} />
 												</div>
+												<LessonAnimationAction chatId={chatId} sourceMessageId={m.parts.filter(p => p.type === "text").map(p => textPartMessageId(p.id)).filter((id): id is string => !!id).at(-1)} showOnlyExisting onQueued={() => fetchJobsRef.current()} />
 											</div>
 									) : (
 									<Message from="assistant" className="max-w-full">
@@ -1614,6 +1616,7 @@ export function Chat({
 													}
 												}
 											})}
+											{!m.parts.some(p => p.type === "tool-animation") && <LessonAnimationAction chatId={chatId} sourceMessageId={m.parts.filter(p => p.type === "text" && (p.text?.trim().length ?? 0) >= 40).map(p => textPartMessageId(p.id)).filter((id): id is string => !!id).at(-1)} busy={localStream && mi === messages.length - 1} onQueued={() => fetchJobsRef.current()} />}
 										</MessageContent>
 									</Message>
 									)}
