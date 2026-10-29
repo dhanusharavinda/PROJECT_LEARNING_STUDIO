@@ -1,4 +1,5 @@
 "use client";
+import { OLLAMA_PROVIDER } from "@/src/core";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse, ModelsSettings, UserSettings } from "@/src/core";
@@ -87,10 +88,10 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 	// failed record read must not report a provisional global preference as
 	// this session's identity (including to the Send guard). Draft mode is
 	// the strong slot itself.
-	const strong = models?.strong;
-	const override: ChatSettings | undefined = chatId
+	const strong = catalog?.offline ? catalog.slots.strong ?? undefined : models?.strong;
+	const override: ChatSettings | undefined = catalog?.offline ? strong : chatId
 		? session ? {
-				model: session.settings?.model ?? strong?.model,
+				model: session.settings?.model?.provider === OLLAMA_PROVIDER ? strong?.model : session.settings?.model ?? strong?.model,
 				thinkingLevel: session.settings?.thinkingLevel ?? strong?.thinkingLevel,
 			} : undefined
 		: strong;
@@ -282,6 +283,8 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 				<button
 				type="button"
 				data-testid="stats-model"
+				disabled={catalog?.offline}
+				title={catalog?.offline ? "Offline learning is on. Change the local model in Providers." : undefined}
 				onClick={() => openMenu("model")}
 				aria-expanded={open === "model"}
 				// Chrome look (owner, fix wave round 3): matches the graph
@@ -305,6 +308,7 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 				<button
 				type="button"
 				data-testid="stats-thinking"
+				disabled={catalog?.offline}
 				onClick={() => {
 					// No model picked → nothing to set a level FOR: the click
 					// is a no-op, never an empty menu.

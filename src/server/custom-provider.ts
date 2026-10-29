@@ -6,6 +6,8 @@
  */
 
 import { createProvider, type Api, type Model, type Provider } from "@earendil-works/pi-ai";
+import "./ollama.ts";
+import { offlineSettings, localOllamaUrl, OLLAMA_PROVIDER } from "../core/offline.ts";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { configureProviderSource, piModels } from "../agent/models.ts";
 import { readSettings } from "../store/settings.ts";
@@ -36,7 +38,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export function installCustomProviderSource(readAuth = customAuthState): void {
 	let fingerprint: string | undefined;
 	configureProviderSource({
-		isCustom: (id) => id === CUSTOM_PROVIDER.id,
+		isCustom: (id) => id === CUSTOM_PROVIDER.id || id === OLLAMA_PROVIDER,
 		sync(models) {
 			const cp = readSettings()?.customProvider;
 			// Validate the durable nonce/URL/mode before resolving ANY credential.
@@ -44,8 +46,11 @@ export function installCustomProviderSource(readAuth = customAuthState): void {
 			const auth = readAuth(cp?.authMode === "apiKey", cp);
 			const key = auth.key;
 			const ready = customProviderUsable(cp) && auth.readable && customBindingMatches(cp, auth.binding) && (cp.authMode === "keyless" || customKeyAuthorized(cp, auth));
-			const next = JSON.stringify([cp, auth]); // Private in-memory fingerprint, never a public revision.
+			const offline = offlineSettings(readSettings());
+			const next = JSON.stringify([cp, auth, offline]); // Private in-memory fingerprint, never a public revision.
 			if (next === fingerprint) return;
+			if (offline?.models?.length && localOllamaUrl(offline.baseUrl)) models.setProvider(buildOpenAiCompatibleProvider({ baseUrl: `${offline.baseUrl}/v1`, models: offline.models, providerId: OLLAMA_PROVIDER, providerName: "Ollama (local)" }));
+			else models.deleteProvider(OLLAMA_PROVIDER);
 			if (ready) models.setProvider(buildOpenAiCompatibleProvider({ ...cp, baseUrl: cp.baseUrl, models: cp.models ?? [], apiKey: key }));
 			else models.deleteProvider(CUSTOM_PROVIDER.id);
 			fingerprint = next;
@@ -66,19 +71,22 @@ function toPiModel(
 	model: CustomModel,
 	baseUrl: string,
 	overrides: Record<string, CustomModelOverride>,
+	providerId: string = CUSTOM_PROVIDER.id,
 ): Model<Api> {
 	const pin = overrides[model.id];
 	return {
 		id: model.id,
 		name: model.id,
 		api: "openai-completions",
-		provider: CUSTOM_PROVIDER.id,
+		provider: providerId,
+		...(providerId === OLLAMA_PROVIDER ? { compat: { supportsDeveloperRole: false, supportsStore: false, maxTokensField: "max_tokens" as const } } : {}),
 		baseUrl,
 		// Pin wins; else detected from the endpoint's metadata (see
 		// detectReasoning). true makes pi-ai offer the standard levels and send
 		// reasoning_effort on the wire; no thinkingLevelMap → the default
 		// off/minimal/low/medium/high set.
 		reasoning: pin?.reasoning ?? Boolean(model.reasoning),
+		...(providerId === OLLAMA_PROVIDER && model.reasoning ? { thinkingLevelMap: { off: "none" } } : {}),
 		input: model.image ? ["text", "image"] : ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: pin?.context ?? model.context ?? CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW,
@@ -89,6 +97,8 @@ function toPiModel(
 
 /** Build an OpenAI-compatible provider from parts. baseUrl must be normalized. */
 export function buildOpenAiCompatibleProvider(input: {
+	providerId?: string;
+	providerName?: string;
 	baseUrl: string;
 	models: readonly CustomModel[];
 	/** User pins by model id (see CustomModelOverride) — absent = none. */
@@ -98,14 +108,14 @@ export function buildOpenAiCompatibleProvider(input: {
 }): Provider<Api> {
 	const overrides = input.overrides ?? {};
 	return createProvider<Api>({
-		id: CUSTOM_PROVIDER.id,
-		name: CUSTOM_PROVIDER.label,
+		id: input.providerId ?? CUSTOM_PROVIDER.id,
+		name: input.providerName ?? CUSTOM_PROVIDER.label,
 		baseUrl: input.baseUrl,
 		auth: { apiKey: {
 			name: `${CUSTOM_PROVIDER.label} API key`,
 			resolve: async () => ({ auth: { apiKey: input.apiKey ?? KEYLESS_PLACEHOLDER }, source: input.apiKey ? CUSTOM_PROVIDER.envVar : "keyless" }),
 		} },
-		models: input.models.map((m) => toPiModel(m, input.baseUrl, overrides)),
+		models: input.models.map((m) => toPiModel(m, input.baseUrl, overrides, input.providerId)),
 		api: openAICompletionsApi(),
 	});
 }

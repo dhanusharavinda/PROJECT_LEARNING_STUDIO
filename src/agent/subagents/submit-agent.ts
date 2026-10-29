@@ -13,7 +13,8 @@ import type { TSchema } from "typebox";
 import { invalidInputResult, toToolResult } from "../tool-execute.ts";
 import type { ModelRole } from "../../../config.ts";
 import type { PiEngine } from "../models.ts";
-import { runSubagent } from "./pi-run.ts";
+import { runSubagent, type SubagentRunOptions } from "./pi-run.ts";
+import { OLLAMA_PROVIDER } from "../../core/offline.ts";
 import { healToolRecord } from "../tools/heal.ts";
 import { healEncodedArguments } from "../../core/argument-heal.ts";
 
@@ -78,8 +79,8 @@ export async function runSubmitAgent<T>(opts: {
 	validate?: (value: T) => string | null;
 }): Promise<T> {
 	let submitted: T | undefined;
-	const result = await runSubagent(
-		[
+	let calls = 0;
+	const tools: AgentTool<any>[] = [
 			// healToolRecord (owner, 2026-10-09): the standard argument heal
 		// over the extra tools (the auditor's graph set) — same as every
 		// registry.
@@ -105,8 +106,8 @@ export async function runSubmitAgent<T>(opts: {
 					return toToolResult(submitted);
 				},
 			} satisfies AgentTool<any>,
-		],
-		{
+		];
+	const options: SubagentRunOptions = {
 			role: opts.role,
 			engine: opts.engine,
 			systemPrompt: opts.systemPrompt,
@@ -114,21 +115,32 @@ export async function runSubmitAgent<T>(opts: {
 			maxTurns: opts.maxTurns ?? 4,
 			abortSignal: opts.signal,
 			chatId: opts.chatId,
-			onAssistantMessage: (message, step) =>
+			onAssistantMessage: (message) => {
+				calls++;
 				opts.onStep(
 					message.usage,
 					// Provider-qualified stamp (model slots wave, 2026-09-20):
 					// pi reports the bare id; usage stamps carry provider:id to
 					// match the price table's uniform keys.
 					`${message.provider}:${message.model}`,
-					step,
+					calls,
 					message.stopReason,
 					message.content.filter((c) => c.type === "toolCall").map((c) => (c as { name: string }).name).join(", ") || "(none)",
-				),
+				);
+			},
 			shouldStop: (_message, toolResults) => toolResults.some((r) => r.toolName === opts.toolName && !r.isError),
-		},
-	);
-	void result;
+		};
+	const result = await runSubagent(tools, options);
+	// Local models sometimes end after looking up context without submitting.
+	// Keep those lookup results and allow one bounded reminder, within the
+	// original turn budget. Paid providers retain their original behavior.
+	const remaining = options.maxTurns - calls;
+	if (!submitted && opts.engine?.model.provider === OLLAMA_PROVIDER && remaining > 0 && !opts.signal?.aborted) {
+		await runSubagent(tools, { ...options, prompt: undefined,
+			messages: [...result.newMessages, { role: "user", content: `The task is not complete. Use the context already collected and call ${opts.toolName} with the final structured result. A prose reply does not submit it.`, timestamp: Date.now() }],
+			maxTurns: Math.min(2, remaining),
+		});
+	}
 	if (!submitted) throw new Error(opts.neverSubmitted);
 	return submitted;
 }

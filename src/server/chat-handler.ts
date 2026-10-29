@@ -1,4 +1,5 @@
 import { renderBlackboard } from "./blackboard.ts";
+import { offlineSpec } from "../core/offline.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 import {
 	createPracticeAgent,
@@ -216,7 +217,7 @@ export async function handleChatInput(
 	// write-ahead persist (nothing durable changes), and every downstream
 	// resolution (jobs/extraction gate per-need on their own tiers).
 	const effective = effectiveSettings();
-	const conversation = resolveConversationSpec(record.settings, effective.models.strong);
+	const conversation = resolveConversationSpec(record.settings, effective.models.strong, Boolean(offlineSpec(stores.settingsStore.readSettings())));
 	if (!conversation) {
 		const envelope = modelsNotConfigured(["strong"]);
 		console.info(`[chat ${chatId}] turn refused — ${JSON.stringify(envelope)}`);
@@ -633,7 +634,7 @@ export async function handleChatInput(
 				if (process.env.NODE_ENV !== "test" && (!requestCycle || requestCycle.dispatched))
 					kickCompaction(() => {
 						const fresh = effectiveSettings();
-						const spec = resolveConversationSpec(stores.chatStore.getChat(chatId)?.settings, fresh.models.strong);
+						const spec = resolveConversationSpec(stores.chatStore.getChat(chatId)?.settings, fresh.models.strong, Boolean(offlineSpec(stores.settingsStore.readSettings())));
 						if (!spec || !connectionBackgroundAllowed(spec.provider)) return null;
 						let kickEngine: PiEngine;
 						try { kickEngine = piEngineForSpec(spec, true); } catch { return null; }

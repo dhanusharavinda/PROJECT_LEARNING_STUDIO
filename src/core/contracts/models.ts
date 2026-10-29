@@ -56,6 +56,7 @@ export type SlotPins = Record<
 
 /** GET /api/models response. */
 export interface ModelCatalogResponse {
+	offline?: boolean;
 	models: ModelCatalogEntry[];
 	/** The conversation agents' resolved default — NULL when the
 	 *  conversation chain is empty (no factory floor; the turn gate

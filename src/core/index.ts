@@ -89,3 +89,4 @@ export * from "./blackboard.ts";
 
 export { deepseekTeachingPreset } from "./studio-models.ts";
 export { lessonExport } from "./lesson-export.ts";
+export { OLLAMA_PROVIDER } from "./offline.ts";

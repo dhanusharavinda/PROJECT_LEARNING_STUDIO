@@ -37,6 +37,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { OfflineLearning } from "@/components/offline-learning";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import type React from "react";
@@ -160,6 +161,7 @@ export function SetupKeysBody({
 }) {
 	return (
 		<div className="flex flex-col gap-3 px-6 py-5" data-testid="setup-stage-keys">
+			<OfflineLearning />
 			<details className="border-b border-border pb-3">
 				<summary className="cursor-pointer text-sm text-foreground focus-visible:outline-2 focus-visible:outline-ring">Preview the animated blackboard</summary>
 				<p className="py-2 text-xs text-muted-foreground">A pre-rendered RAG example, made with ManimGX. No API key or paid request is needed to play it.</p>

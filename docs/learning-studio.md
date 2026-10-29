@@ -4,11 +4,37 @@ Learning Studio is a separate Windows desktop application. LearnHarness remains 
 
 ## First use
 
-Run `dist/Learning Studio-0.4.0-studio.1-x64-setup.exe` from this project to install the application. The installer lets you choose a location and includes its own Python renderer. A separate system Python installation is not required.
+Run `dist/Learning Studio-0.4.0-studio.2-x64-setup.exe` from this project to install the application. The installer lets you choose a location and includes its own Python renderer. A separate system Python installation is not required.
+
+### Offline learning
+
+In Providers, choose an installed model in **Offline model**, then turn on **Offline learning**. The same switch appears in first-use setup. Models are discovered from your local Ollama server, and cloud models are excluded. The chosen model is stored as a preference, not compiled into the app. To download the user's requested model, run `ollama pull qwen3.5:9b` once while connected to the internet. Model weights live in Ollama's storage, outside the application installer.
+
+Offline mode routes teaching, practice, visual reading, and background model work to the local model, including sessions with older cloud overrides. A local Ollama alias configures a 32k context without changing the source model or duplicating its weights. New remote server requests are blocked, including online search and dictation. Requests already sent before switching modes cannot be recalled. Manual external links still open in the browser. Turn offline learning off to restore the saved cloud choices. No automatic paid fallback occurs if Ollama stops.
+
+For a DeepSeek-only online setup, use Flash for everyday lessons, summaries, grading, and visual reading. Use Pro for difficult mathematical explanations, debugging, and architecture questions, retaining Flash for image input where Pro lacks vision. Model selection stays under user control.
 
 Open Learning Studio. Start a lesson and its setup dialog opens if models are not configured. DeepSeek is preselected as the initial provider. Paste a key into the password field, save it, choose **Use recommended**, and then **Save models**. This configures DeepSeek Flash for teaching, workhorse tasks, and visual checks with low reasoning effort where supported. Saving setup does not send a lesson or start a model request. DeepSeek Pro remains selectable for difficult lessons. Keys are stored locally through LearnHarness's existing auth store, never compiled into the installer or returned as plaintext through the settings API.
 
 The user chose to create their API key later. Until then, expand **Preview the animated blackboard** in setup to play a pre-rendered RAG example without a provider call. The sample is clearly labeled and does not impersonate a live AI conversation. To create a key later, use the official DeepSeek platform, then enter it in the application rather than in a chat or screenshot.
+
+## Optional services in Providers
+
+- **Deepgram** transcribes microphone speech into text for dictation. It is not the teaching model.
+- **Tavily** supplies web search results for the research assistant.
+- **Brave Search** is an alternative search provider. One working search provider is enough; both are optional.
+
+These online services can remain unconfigured for offline learning. Teaching text and local images use the selected local model. Online research and dictation are paused while offline mode is on.
+
+## Find the knowledge graph
+
+Click the top-left logo, whose hover label is **Knowledge graph**, to open Home. In Settings, Graph, keep **Graph rendering** on to see the canvas and **Extraction** on to build learning records. A new notebook starts empty. Import notes from Home or allow the extraction workflow to process learning material. Synapse and Learning Studio have separate graphs; import chosen Markdown notes when transferring material.
+
+## How the two engines work together
+
+LearnHarness owns the conversation, prerequisite assessment, practice, saved lessons, and knowledge graph. Its new animation tool supplies a validated scene plan to the bundled ManimGX renderer. ManimGX returns a local video and poster, displayed as a card directly inside the lesson conversation with playback, chapters, and download. The teacher then asks a question to check understanding. Shared instructions tell all model roles never to use em dashes in newly generated text.
+
+`Question -> LearnHarness teacher -> Scene plan -> ManimGX -> Animation card -> Understanding check`
 
 ## A RAG lesson
 

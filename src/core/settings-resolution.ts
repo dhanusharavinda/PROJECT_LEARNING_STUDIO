@@ -23,6 +23,7 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { offlineSpec, OLLAMA_PROVIDER } from "./offline.ts";
 import type { ModelRole } from "../../config.ts";
 import type { ChatSettings } from "./contracts/chat.ts";
 import type { SearchEngineId } from "./search.ts";
@@ -110,8 +111,11 @@ export interface EffectiveSettings {
 export function resolveConversationSpec(
 	chat: ChatSettings | undefined,
 	strong: EffectiveSlot | null,
+	offline = false,
 ): EffectiveModelSpec | null {
-	const model = chat?.model ?? (strong ? { provider: strong.provider, id: strong.id } : undefined);
+	if (offline) return strong;
+	const saved = chat?.model?.provider === OLLAMA_PROVIDER ? undefined : chat?.model;
+	const model = saved ?? (strong ? { provider: strong.provider, id: strong.id } : undefined);
 	if (!model) return null;
 	return {
 		provider: model.provider,
@@ -128,6 +132,8 @@ export function resolveConversationSpec(
  *  empty; the per-need refusal gates fire on exactly that. This is the
  *  engine wiring's one call. */
 export function resolveRoleSpec(role: ModelRole, record: UserSettings | null): EffectiveModelSpec | undefined {
+	const local = offlineSpec(record);
+	if (local) return local;
 	const bg = BACKGROUND_MODEL_ROLES as readonly string[];
 	const override = bg.includes(role) ? record?.agent?.models?.[role as BackgroundModelRole] : undefined;
 	return resolveModelSpec(role, override, record?.models);
@@ -168,6 +174,7 @@ export function resolveModelSpec(
  *  null/undefined when unset (no factory pins exist — BYOK all the way
  *  down, owner 2026-09-22). */
 export function resolveSettings(record: UserSettings | null): EffectiveSettings {
+	const local = offlineSpec(record);
 	const agent = record?.agent ?? {};
 	const modelsSection = record?.models ?? {};
 	const appearance = record?.appearance ?? {};
@@ -177,7 +184,7 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 	const factoryMd = factoryAppearance.mdRendering;
 	const models = {} as Record<BackgroundModelRole, EffectiveModelSpec | undefined>;
 	for (const role of BACKGROUND_MODEL_ROLES) {
-		models[role] = resolveModelSpec(role, agent.models?.[role], modelsSection);
+		models[role] = local ?? resolveModelSpec(role, agent.models?.[role], modelsSection);
 	}
 	return {
 		general: {
@@ -188,15 +195,15 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 		},
 		agent: {
 			models,
-			tools: agent.tools ?? {},
+			tools: local ? { ...agent.tools, research: false } : agent.tools ?? {},
 			prompts: agent.prompts ?? {},
 			search: agent.search ?? {},
 			graphTools: agent.graphTools ?? {},
 		},
 		models: {
-			strong: resolveSlot(modelsSection.strong),
-			cheap: resolveSlot(modelsSection.cheap),
-			vision: resolveSlot(modelsSection.vision),
+			strong: local ?? resolveSlot(modelsSection.strong),
+			cheap: local ?? resolveSlot(modelsSection.cheap),
+			vision: local ?? resolveSlot(modelsSection.vision),
 		},
 		appearance: {
 			mode: appearance.mode ?? factoryAppearance.mode,

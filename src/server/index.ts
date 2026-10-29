@@ -52,3 +52,4 @@ export * from "./custom-provider.ts";
 export { customProviderGet, customProviderMutation } from "./custom-provider-http.ts";
 
 export { renderBlackboard, blackboardAvailability, blackboardMediaResponse } from "./blackboard.ts";
+export { ollamaGet, ollamaPost } from "./ollama.ts";

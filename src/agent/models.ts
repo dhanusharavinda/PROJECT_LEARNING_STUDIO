@@ -13,6 +13,7 @@ import { lazyApi, lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type ModelRole } from "../../config.ts";
 import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
+import { offlineProviderAllowed, offlineRuntimeModel, OLLAMA_PROVIDER } from "../core/offline.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { chatGPTModel } from "./chatgpt-bridge.ts";
 import { chatGPTStream } from "./chatgpt-stream.ts";
@@ -129,13 +130,14 @@ function defaultThinkingLevel(model: Model<Api>): ThinkingLevel {
  *  keys seam reflects file-saved keys into env), so the engine never
  *  hardcodes OpenRouter's. */
 export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (() => boolean) = true, lifecycle?: ChatGPTDispatchLifecycle): PiEngine {
+	if (!offlineProviderAllowed(spec.provider)) throw new Error("Offline learning is on. Choose your local Ollama model.");
 	const models: Models = piModels();
 	const nativeId = nativeSubscriptionId(spec.provider);
 	const registeredModel = spec.provider === "chatgpt" ? chatGPTModel(spec.id) : nativeId ? nativeSubscriptionModel(spec.provider, spec.id) : models.getModel(spec.provider, spec.id);
 	const custom = providerSource?.isCustom(spec.provider) ?? false;
 	// Custom endpoint owners authorize image attempts independently of sparse
 	// discovery metadata. Never promote the registered/catalog capabilities.
-	const permitImages = (value: Model<Api>): Model<Api> => ({ ...value, input: ["text", "image"] });
+	const permitImages = (value: Model<Api>): Model<Api> => spec.provider === OLLAMA_PROVIDER ? value : ({ ...value, input: ["text", "image"] });
 	const model = custom && registeredModel ? permitImages(registeredModel) : registeredModel;
 	if (!model) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
@@ -156,6 +158,8 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 		// = off on pi-ai's scale). Built-ins keep the factory clamp; custom
 		// requests re-resolve thinking against their current metadata below.
 		streamFn: (requestModel, context, options) => {
+			const styledContext = { ...context, messages: [...context.messages, { role: "system" as const, content: "Never use em dashes in generated explanations, questions, labels, or tool arguments. Use commas, colons, periods, or parentheses instead.", timestamp: 0 }] };
+			if (!offlineProviderAllowed(spec.provider)) return lazyStream(requestModel, async () => { throw new Error("Offline learning is on. Retry using your selected local model."); });
 			if (custom) {
 				// Revalidate before EVERY upstream model operation, including later
 				// tool-loop steps. Resolve thinking from the ORIGINAL preference (or
@@ -167,12 +171,13 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 				const currentLevel = thinkingPreference
 					? clampThinkingLevel(currentModel, thinkingPreference)
 					: defaultThinkingLevel(currentModel);
-				return current.streamSimple(permitImages(currentModel), context, { ...options, reasoning: currentLevel === "off" ? undefined : currentLevel });
+				const target = spec.provider === OLLAMA_PROVIDER && offlineRuntimeModel() ? { ...permitImages(currentModel), id: offlineRuntimeModel()! } : permitImages(currentModel);
+				return current.streamSimple(target, styledContext, { ...options, ...(spec.provider === OLLAMA_PROVIDER ? { temperature: options?.temperature ?? 0.2 } : {}), reasoning: currentLevel === "off" ? undefined : currentLevel });
 			}
 			const requestOptions = { ...options, reasoning: level === "off" ? undefined : level };
 			const purpose = typeof background === "function" ? background : () => background;
 			const stream = spec.provider === "chatgpt" ? chatGPTStream(purpose, lifecycle) : nativeId ? nativeSubscriptionStream(models.getProvider(nativeId)!, purpose, lifecycle) : models.streamSimple.bind(models);
-			return stream(requestModel, context, requestOptions);
+			return stream(requestModel, styledContext, requestOptions);
 		},
 	};
 }

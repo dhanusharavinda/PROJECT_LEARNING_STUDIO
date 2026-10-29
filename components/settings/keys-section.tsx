@@ -24,6 +24,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { OfflineLearning } from "@/components/offline-learning";
 import {
 	AUTH_KEYS,
 	CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW,
@@ -491,6 +492,7 @@ export function KeysSection({
 
 	return (
 		<>
+			<OfflineLearning />
 			<SettingsGroup label="Model API keys" testid="group-provider-keys">
 				{providerRows.map((status) => (
 					<KeyTableRow
