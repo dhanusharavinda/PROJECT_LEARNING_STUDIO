@@ -19,3 +19,8 @@ xai-credentials.json*
 
 # dev-fresh launcher scratch (fresh-user sim): disposable per launch
 .fresh-data/
+
+# Learning Studio local runtimes and verification artifacts
+work/
+.runtime/
+.env*

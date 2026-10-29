@@ -39,6 +39,9 @@ function windowOptions(platform: string, env: Record<string, string> = {}) {
 }
 
 describe("desktop window chrome", () => {
+	it("uses a distinct Learning Studio window identity", () => {
+		assert.equal(windowOptions("win32").title, "Learning Studio");
+	});
 	it("macOS keeps the proven traffic lights and does not enable WCO", () => {
 		const options = windowOptions("darwin");
 		assert.equal(options.titleBarStyle, "hiddenInset");
@@ -156,7 +159,9 @@ describe("desktop packaging policy", () => {
 			{ target: "AppImage", arch: ["x64"] }, { target: "deb", arch: ["x64"] },
 		]);
 		assert.equal(config.linux.syncDesktopName, true);
-		assert.equal(config.publish[0].releaseType, "draft");
+		assert.equal(config.publish, null);
+		assert.equal(config.appId, "com.synapse.learningstudio");
+		assert.equal(config.productName, "Learning Studio");
 	});
 
 	it("deb has public maintainer metadata and a matching desktop identity", () => {

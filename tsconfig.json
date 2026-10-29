@@ -43,6 +43,8 @@
   ],
   "exclude": [
     "node_modules",
+    "work",
+    ".runtime",
     "dist",
     ".next"
   ]

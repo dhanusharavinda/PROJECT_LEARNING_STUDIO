@@ -1,6 +1,6 @@
 {
-	"name": "learnharness",
-	"version": "0.4.0",
+	"name": "learning-studio",
+	"version": "0.4.0-studio.1",
 	"license": "AGPL-3.0-only",
 	"author": {
 		"name": "Amos Blomqvist",
@@ -8,7 +8,7 @@
 	},
 	"homepage": "https://github.com/amosblomqvist/learnharness",
 	"desktopName": "learnharness.desktop",
-	"description": "An agent harness for learning: adaptive teaching, practice, and a persistent knowledge graph.",
+	"description": "LearnHarness with a local ManimGX teaching blackboard.",
 	"type": "module",
 	"private": true,
 	"main": "electron/main.cjs",
@@ -16,12 +16,14 @@
 		"dev": "next dev",
 		"build": "next build",
 		"start": "next start",
-		"test": "NODE_ENV=test tsx --test tests/*.test.ts tests/*.test.tsx",
+		"test": "node scripts/test.mjs",
 		"lint": "eslint .",
 		"typecheck": "tsc --noEmit",
 		"desktop:dev": "concurrently -k \"next dev\" \"LH_DEV_URL=http://localhost:3000 electron .\"",
 		"dev:fresh": "bash scripts/dev-fresh.sh",
-		"desktop:dist": "rm -rf dist .next/standalone && next build && node scripts/smoke-provider-runtime.mjs && node scripts/build-server.mjs && node scripts/smoke-server.mjs && DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} APPLE_KEYCHAIN_PROFILE=LH_NOTARY APPLE_TEAM_ID=JS6XN22HY6 electron-builder --mac --arm64"
+		"desktop:dist": "rm -rf dist .next/standalone && next build && node scripts/smoke-provider-runtime.mjs && node scripts/build-server.mjs && node scripts/smoke-server.mjs && DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} APPLE_KEYCHAIN_PROFILE=LH_NOTARY APPLE_TEAM_ID=JS6XN22HY6 electron-builder --mac --arm64",
+		"desktop:win": "node scripts/build-windows.mjs",
+		"desktop:pack": "node scripts/build-windows.mjs --pack-only"
 	},
 	"dependencies": {
 		"@earendil-works/pi-agent-core": "1.4.0",
@@ -37,7 +39,6 @@
 		"@streamdown/math": "^1.0.2",
 		"@streamdown/mermaid": "^1.0.2",
 		"@xyflow/react": "^12.11.3",
-		"ansi-to-react": "^6.2.6",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"cmdk": "^1.1.1",
@@ -55,8 +56,8 @@
 		"mdast-util-from-markdown": "2.0.3",
 		"mdast-util-math": "3.0.0",
 		"media-chrome": "^4.19.2",
-		"micromark-extension-math": "3.1.0",
 		"mermaid": "^11.17.0",
+		"micromark-extension-math": "3.1.0",
 		"motion": "^13.1.1",
 		"nanoid": "^6.0.1",
 		"next": "^16.4.3",
@@ -96,5 +97,6 @@
 		"tailwindcss": "^4.3.3",
 		"tsx": "^4.19.0",
 		"typescript": "^5.6.0"
-	}
+	},
+	"productName": "Learning Studio"
 }

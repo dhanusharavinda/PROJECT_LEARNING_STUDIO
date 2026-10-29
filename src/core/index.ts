@@ -84,3 +84,8 @@ export * from "./coverage.ts";
 // ONE session→markdown formatter — the extractor's view and the user-facing
 // export share it. Pure, browser-safe.
 export * from "./session-markdown.ts";
+
+export * from "./blackboard.ts";
+
+export { deepseekTeachingPreset } from "./studio-models.ts";
+export { lessonExport } from "./lesson-export.ts";

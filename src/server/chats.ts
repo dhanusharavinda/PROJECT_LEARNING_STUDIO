@@ -8,6 +8,7 @@ import { stores } from "./stores.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
 import { clearTurnFailure } from "./turn-runs.ts";
 import { discardChatDeliveries } from "./jobs.ts";
+import { deleteChatBlackboardsSync } from "./blackboard.ts";
 
 /**
  * Server-side chat entries for the transport layer (app/api/chats*,
@@ -36,7 +37,7 @@ const WIND_DOWN_POLL_MS = 50;
 export type ChatDeleteOutcome =
 	| { ok: false; status: 404; code: "not_found"; error: string }
 	| { ok: false; status: 409; code: "turn_in_flight" | "jobs_running"; error: string; jobIds: string[] }
-	| { ok: false; status: 503; code: "extraction_winding_down"; error: string }
+	| { ok: false; status: 503; code: "extraction_winding_down" | "artifact_cleanup_failed"; error: string }
 	| {
 			ok: true;
 			mode: ChatDeleteMode;
@@ -123,8 +124,12 @@ export async function deleteChatSession(chatId: string, mode: ChatDeleteMode): P
 	if (lateBlocker) return lateBlocker;
 
 	// THE SYNC BLOCK — no awaits below (see the doc comment). Order:
-	// ledgers → jobs → the chat record.
+	// ledgers, private animation artifacts, jobs, then the chat record.
 	const stats = deleteChatTraces(stores.graphStore, chatId, mode);
+	try { deleteChatBlackboardsSync(chatId, stores.jobStore.listJobs(chatId), stores.chatStore.getChat(chatId)); }
+	catch {
+		return { ok: false, status: 503, code: "artifact_cleanup_failed", error: "The lesson's animation files could not be safely removed. Close any open video and retry deleting the lesson." };
+	}
 	const jobsRemoved = stores.jobStore.deleteJobsForChat(chatId);
 	if (stores.chatStore.deleteChat(chatId)) {
 		discardChatDeliveries(chatId);

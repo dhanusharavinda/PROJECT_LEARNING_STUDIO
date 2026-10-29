@@ -1,3 +1,5 @@
+import type { BlackboardPlan } from "../../core/blackboard.ts";
+import { animationInputSchema, validateAnimationInput } from "./animation.ts";
 import { Type, type Static } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
@@ -22,7 +24,7 @@ export interface JobToolContext {
 	/** Fire the background runner for a fresh job — fire-and-forget. The
 	 *  input rides along because the spawn happens MID-STREAM, before
 	 *  onFinish persists the tool part — a transcript scan would race it. */
-	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
+	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput | BlackboardPlan) => void;
 	/** Search-provider availability, retained for existing composition seams.
 	 *  Research dispatch does not depend on it: web_fetch is keyless and
 	 *  web_search reports a missing provider as a recoverable tool result. */
@@ -75,7 +77,7 @@ function dispatch(
 	kind: JobRecord["kind"],
 	toolCallId: string,
 	ack: string,
-	input: ResearchInput | DemoInput | VisualInput | PdfInput,
+	input: ResearchInput | DemoInput | VisualInput | PdfInput | BlackboardPlan,
 ): string {
 	const existing = ctx.jobStore.findJobByToolCallId(ctx.chatId, toolCallId);
 	const job = existing ?? ctx.jobStore.createJob({ kind, chatId: ctx.chatId, toolCallId, input });
@@ -138,6 +140,12 @@ export function jobTools(ctx: JobToolContext): Record<string, AgentTool<any>> {
 			execute: serverExecute("research", researchInputSchema, (input, { toolCallId }) =>
 				dispatch(ctx, "research", toolCallId, RESEARCH_ACK, input),
 			),
+		},
+		animation: {
+			name: "animation", label: "Animated board",
+			description: "Render a short ManimGX animated teaching board. Supply a complete structured plan grounded in the current lesson. Use flow for pipelines, vectors for two numerical vectors, gradient_descent for minimizing x squared, text for a worked explanation. Each beat is a replayable chapter. Continue teaching while it renders. Never send Python or code. Prefer 2 to 4 short beats; use demo for adjustable controls and visual for static geometry. After playback, ask the learner a prediction or application question.",
+			parameters: animationInputSchema,
+			execute: serverExecute("animation", animationInputSchema, (input, { toolCallId }) => dispatch(ctx, "animation", toolCallId, "The animated board will arrive in the lesson. Continue teaching now, then use its chapters to check understanding.", validateAnimationInput(input))),
 		},
 		demo: {
 			name: "demo",

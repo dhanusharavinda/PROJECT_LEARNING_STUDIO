@@ -40,7 +40,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import type React from "react";
-import { type ModelCatalogEntry, type ModelSlotName, type ModelsSettings, CUSTOM_PROVIDER } from "@/src/core";
+import { type ModelCatalogEntry, type ModelSlotName, type ModelsSettings, CUSTOM_PROVIDER, deepseekTeachingPreset } from "@/src/core";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList } from "@/components/settings/model-menu";
 import { MenuShell } from "@/components/menu-shell";
@@ -160,6 +160,11 @@ export function SetupKeysBody({
 }) {
 	return (
 		<div className="flex flex-col gap-3 px-6 py-5" data-testid="setup-stage-keys">
+			<details className="border-b border-border pb-3">
+				<summary className="cursor-pointer text-sm text-foreground focus-visible:outline-2 focus-visible:outline-ring">Preview the animated blackboard</summary>
+				<p className="py-2 text-xs text-muted-foreground">A pre-rendered RAG example, made with ManimGX. No API key or paid request is needed to play it.</p>
+				<video controls playsInline preload="none" poster="/studio/rag-preview.png" src="/studio/rag-preview.mp4" aria-label="RAG blackboard sample" className="aspect-video w-full rounded-sm bg-muted" />
+			</details>
 			<p className="text-xs text-muted-foreground">
 				Choose your AI provider and paste its API key. You’ll pick your models next.
 			</p>
@@ -293,7 +298,12 @@ function OpenSetupDialog({ onClose, onDone }: SetupDialogProps) {
 		let cancelled = false;
 		fetch("/api/keys")
 			.then((r) => r.json())
-			.then((b: { providers?: ProviderKeyInfo[] }) => { if (!cancelled) setKeyProviders(b.providers ?? []); })
+			.then((b: { providers?: ProviderKeyInfo[] }) => {
+				if (!cancelled) {
+					setKeyProviders(b.providers ?? []);
+					setKeyProvider((current) => current ?? b.providers?.find((p) => p.id === "deepseek") ?? null);
+				}
+			})
 			.catch(() => { if (!cancelled) setKeyProviders([]); });
 		return () => { cancelled = true; };
 	}, [keysTick]);
@@ -376,6 +386,14 @@ function OpenSetupDialog({ onClose, onDone }: SetupDialogProps) {
 	if (closeAfterConnection) return null;
 
 	const allPicked = SLOT_ORDER.every((s) => picked[s]);
+	const recommended = deepseekTeachingPreset(catalog?.models ?? []);
+	function useRecommended() {
+		if (!recommended) return;
+		for (const slot of SLOT_ORDER) editedSlots.current.add(slot);
+		setPicked(Object.fromEntries(SLOT_ORDER.map((slot) => [slot, recommended[slot]!.model!])));
+		setLevels(Object.fromEntries(SLOT_ORDER.map((slot) => [slot, recommended[slot]!.thinkingLevel])));
+		setError(null);
+	}
 
 	/** Stage 1's save: PUT the pasted key, dispatch the keys signal, and
 	 *  CLEAN the local key field. The fresh catalog decides whether to
@@ -484,6 +502,10 @@ function OpenSetupDialog({ onClose, onDone }: SetupDialogProps) {
 					<div className="flex flex-col px-6 py-5">{keysBody}</div>
 				) : (
 					<div className="flex flex-col gap-4 overflow-y-auto px-6 py-5" data-testid="setup-stage-pickers">
+						{recommended && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+							<div><p className="text-sm text-foreground">DeepSeek teaching setup</p><p className="max-w-96 text-xs text-muted-foreground">Flash for teaching, visual checks, and background work. You can switch to Pro for a difficult lesson.</p></div>
+							<button type="button" onClick={useRecommended} className="rounded-sm border border-border px-3 py-2 text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">Use recommended</button>
+						</div>}
 						<p className="text-xs text-muted-foreground">
 							Pick the model for each tier. All three are required before chats can start.
 						</p>

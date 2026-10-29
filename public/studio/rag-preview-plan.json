@@ -1,0 +1,89 @@
+{
+  "title": "RAG: retrieve evidence before answering",
+  "beats": [
+    {
+      "title": "Prepare a searchable index",
+      "caption": "Documents are split into passages, embedded, and stored for retrieval.",
+      "kind": "flow",
+      "duration": 4,
+      "nodes": [
+        {
+          "id": "documents",
+          "label": "Documents"
+        },
+        {
+          "id": "chunks",
+          "label": "Passages"
+        },
+        {
+          "id": "embeddings",
+          "label": "Embeddings"
+        },
+        {
+          "id": "index",
+          "label": "Searchable index"
+        }
+      ],
+      "edges": [
+        {
+          "from": "documents",
+          "to": "chunks"
+        },
+        {
+          "from": "chunks",
+          "to": "embeddings"
+        },
+        {
+          "from": "embeddings",
+          "to": "index"
+        }
+      ]
+    },
+    {
+      "title": "Answer with retrieved evidence",
+      "caption": "Retrieve passages relevant to the question, then give those passages and the question to the model.",
+      "kind": "flow",
+      "duration": 4,
+      "nodes": [
+        {
+          "id": "question",
+          "label": "Question"
+        },
+        {
+          "id": "retrieve",
+          "label": "Retrieve passages"
+        },
+        {
+          "id": "context",
+          "label": "Evidence + question"
+        },
+        {
+          "id": "model",
+          "label": "Language model"
+        },
+        {
+          "id": "answer",
+          "label": "Answer with citations"
+        }
+      ],
+      "edges": [
+        {
+          "from": "question",
+          "to": "retrieve"
+        },
+        {
+          "from": "retrieve",
+          "to": "context"
+        },
+        {
+          "from": "context",
+          "to": "model"
+        },
+        {
+          "from": "model",
+          "to": "answer"
+        }
+      ]
+    }
+  ]
+}

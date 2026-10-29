@@ -1,5 +1,6 @@
 "use client";
 
+import { AnimationOutputCard } from "@/components/artifacts/animation-card";
 import { CheckIcon, CircleX } from "lucide-react";
 import type { PdfResult, ResearchResult, SubagentArtifactData } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
@@ -55,6 +56,8 @@ export function SubagentSteerCard({ message }: { message: LhViewMessage }) {
 			) : (
 				<PdfCompleteBadge result={data.result as PdfResult} />
 			);
+		case "animation":
+			return <AnimationOutputCard output={data.result} />;
 		case "demo":
 			return <DemoOutputCard output={data.result} messageId={message.id} initialInverted={data.ui?.inverted ?? false} />;
 		case "visual":

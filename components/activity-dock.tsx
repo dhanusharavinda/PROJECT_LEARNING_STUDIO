@@ -281,6 +281,7 @@ function useNow(active: boolean): number {
 const KIND_ICON: Record<JobKind, typeof SearchIcon> = {
 	research: SearchIcon,
 	demo: PlayIcon,
+	animation: PlayIcon,
 	visual: PenToolIcon,
 	pdf: FileTextIcon, // sources v0 — type-forced entry (JobKind grew "pdf")
 };

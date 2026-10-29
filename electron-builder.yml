@@ -9,8 +9,8 @@
 #   - signed + notarized since 2026-10-08 (Developer ID Application cert in
 #     the login keychain; notary credentials in the LH_NOTARY keychain
 #     profile; the profile + team env vars are baked into desktop:dist).
-appId: com.learnharness.LearnHarness
-productName: LearnHarness
+appId: com.synapse.learningstudio
+productName: Learning Studio
 directories:
   output: dist
 # Icons (owner ruling, 2026-10-13) — per-platform sources in build/:
@@ -84,6 +84,13 @@ files:
   # Main-process ID-token signature verification (no bundled OAuth implementation).
   - node_modules/jose/**/*
 extraResources:
+  - from: .runtime/manimgx-portable
+    to: manimgx-runtime
+    filter:
+      - '**/*'
+      - '!**/__pycache__/**/*'
+  - from: LICENSE
+    to: licenses/LearnHarness-AGPL-3.0.txt
   # Attribution/license for the bounded local Pi cutoff-selector port.
   - from: docs/compaction-accounting.md
     to: licenses/pi-compaction.md
@@ -163,8 +170,9 @@ win:
   signExecutable: false
   verifyUpdateCodeSignature: false
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: false
+  allowToChangeInstallationDirectory: true
 linux:
   icon: build/icon.png
   target:
@@ -180,15 +188,4 @@ linux:
   syncDesktopName: true
   # Both targets update via electron-updater 6.8.9. AppImage replaces its
   # own file; deb uses dpkg/apt and may request administrator permission.
-publish:
-  # Update feed = GitHub Releases (decided 2026-10-08): latest-mac.yml +
-  # zip/blockmap live on releases; electron-updater reads them anonymously.
-  # REQUIRES THE REPO TO BE PUBLIC before 0.3.0 ships — anonymous downloads
-  # from a private repo are impossible, and a token baked into the app
-  # would be a leak. desktop:dist passes no --publish flag, so builds never
-  # upload; publishing happens at release time (GH_TOKEN + --publish).
-  - provider: github
-    owner: amosblomqvist
-    repo: learnharness
-    # All three CI jobs contribute assets; only the owner publishes it.
-    releaseType: draft
+publish: null

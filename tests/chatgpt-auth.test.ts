@@ -244,7 +244,9 @@ test("account catalog is scoped, visibility filtered, and cleared on disconnect"
 	} finally { f.service.close(); }
 });
 
-test("private JSON file round-trips global state; creation and atomic replacement are owner-only", async () => {
+test("private JSON file round-trips global state; creation and atomic replacement request private modes", async (t) => {
+	const opens = t.mock.method(fs, "open");
+	const mkdirs = t.mock.method(fs, "mkdir");
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lh-chatgpt-storage-"));
 	const file = path.join(dir, "private", "chatgpt-credentials.json");
 	try {
@@ -254,11 +256,15 @@ test("private JSON file round-trips global state; creation and atomic replacemen
 		await store.write(data);
 		assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), data, "ordinary JSON, not an encrypted envelope");
 		assert.deepEqual(await store.read(), data);
-		assert.equal((await fs.stat(path.dirname(file))).mode & 0o777, 0o700);
-		assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+		if (process.platform !== "win32") assert.equal((await fs.stat(path.dirname(file))).mode & 0o777, 0o700);
+		if (process.platform !== "win32") assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
 		await fs.chmod(file, 0o644);
 		await store.write({ ...data, allowBackgroundUse: true });
-		assert.equal((await fs.stat(file)).mode & 0o777, 0o600, "replacement never inherits a permissive old mode");
+		if (process.platform !== "win32") assert.equal((await fs.stat(file)).mode & 0o777, 0o600, "replacement never inherits a permissive old mode");
+		const privateOpens = opens.mock.calls.filter(call => call.arguments[1] === "wx");
+		assert.equal(privateOpens.length, 2);
+		for (const call of privateOpens) assert.equal(call.arguments[2], 0o600);
+		for (const call of mkdirs.mock.calls) assert.equal((call.arguments[1] as { mode: number }).mode, 0o700);
 		assert.equal((await store.read()).allowBackgroundUse, true);
 		assert.deepEqual(await fs.readdir(path.dirname(file)), ["chatgpt-credentials.json"]);
 	} finally { await fs.rm(dir, { recursive: true, force: true }); }

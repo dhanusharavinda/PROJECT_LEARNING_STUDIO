@@ -569,7 +569,9 @@ test("cwd is an empty temp dir; prompt and mcp config live in a separate private
 	assert.ok(!privateDir.startsWith(call.cwd + sep));
 	assert.equal(dirname(getFlagValue(call.args, "--mcp-config")), privateDir);
 	assert.equal(call.systemPrompt, "You are a tutor.");
-	assert.equal(call.mcpConfigMode, 0o600);
+	// Windows stat exposes synthesized DOS permission bits, not the file's NTFS ACL.
+	if (process.platform === "win32") assert.equal(call.mcpConfigMode & 0o600, 0o600);
+	else assert.equal(call.mcpConfigMode, 0o600);
 
 	const mcpConfig = JSON.parse(call.mcpConfig) as { mcpServers: Record<string, { url: string }> };
 	assert.match(mcpConfig.mcpServers.learnharness?.url ?? "", /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
@@ -902,7 +904,8 @@ test("normal completion escalates termination when the child ignores SIGTERM", a
 	const { events, calls } = await runScenario(t, [JSON.stringify({ fake: "ignore-term" }), ...readFixtureLines("text.jsonl"), HOLD]);
 	assert.equal(getLastEvent(events).type, "done");
 	await assertCleanedUp(getOnlyCall(calls));
-	assert.equal(getOnlyCall(calls).child.signalCode, "SIGKILL");
+	// Node terminates processes immediately on Windows; SIGTERM cannot be ignored there.
+	assert.equal(getOnlyCall(calls).child.signalCode, process.platform === "win32" ? "SIGTERM" : "SIGKILL");
 });
 
 for (const asyncVersionFailure of [false, true]) test(`${asyncVersionFailure ? "an asynchronous version-check" : "a synchronous spawn"} failure removes both temp directories and the bridge`, async () => {

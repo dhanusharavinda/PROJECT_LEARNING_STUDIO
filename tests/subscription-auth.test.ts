@@ -41,14 +41,15 @@ test("main loader resolves Pi's import-only PUBLIC package exports and native OA
 		const resolved = await models.getAuth(provider.getModels()[0]); assert.equal(resolved.auth.apiKey, credential(id).access);
 	}
 });
-for (const id of ids) test(`${id}: independent default-ON file, restart, explicit OAuth lease and local disconnect`, async () => {
+for (const id of ids) test(`${id}: independent default-ON file, restart, explicit OAuth lease and local disconnect`, async (t) => {
 	const f = await fixture();
 	try {
 		assert((await f.controller.status()).every((s: any) => s.available && !s.connected && s.allowBackgroundUse));
 		await f.controller.login(id, false);
 		const saved = JSON.parse(await fs.readFile(path.join(f.directory, `${id}-credentials.json`), "utf8"));
 		assert.equal(saved.version, 1); assert.equal(saved.credential.type, "oauth"); assert.equal(saved.allowBackgroundUse, false);
-		assert.equal((await fs.stat(path.join(f.directory, `${id}-credentials.json`))).mode & 0o777, 0o600);
+		if (process.platform !== "win32") assert.equal((await fs.stat(path.join(f.directory, `${id}-credentials.json`))).mode & 0o777, 0o600);
+		assert.deepEqual((await fs.readdir(f.directory)).filter(name => name.endsWith(".tmp")), []);
 		const publicState = JSON.stringify(await f.controller.snapshot());
 		assert(!publicState.includes(saved.credential.access)); assert(!publicState.includes(saved.credential.refresh));
 		const scope = await f.scope(id), result = await f.controller.lease(scope, false);

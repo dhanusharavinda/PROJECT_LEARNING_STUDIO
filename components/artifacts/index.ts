@@ -1,3 +1,4 @@
+import { AnimationCard } from "@/components/artifacts/animation-card";
 import type { ComponentType } from "react";
 import type { ArtifactPartProps } from "@/src/core";
 import { DemoCard } from "@/components/artifacts/demo-card";
@@ -27,6 +28,7 @@ export const artifactRenderers: Record<string, ComponentType<ArtifactPartProps>>
 	// part-level plan_init divider retired with it).
 	// Artifacts (W6 fills in the components):
 	demo: DemoCard,
+	animation: AnimationCard,
 	visual: VisualCard,
 	// The probe conclusion: the assessment belongs to the learner as much as
 	// to the transcript (docs/probe-teach-split.md §2). Plain v1 card.

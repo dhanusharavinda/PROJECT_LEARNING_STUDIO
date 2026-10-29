@@ -20,6 +20,7 @@ import { runPdfReaderAgent } from "../src/agent/subagents/pdf-reader.ts";
 import type { HeadlessApi } from "../src/agent/subagents/headless.ts";
 import { AUTH_PROVIDER_KEYS } from "../src/core/auth-keys.ts";
 import { providerEventsDir } from "../src/agent/provider-events.ts";
+import packageMetadata from "../package.json" with { type: "json" };
 
 const OR_KEY = "dummy-openrouter-MUST-NOT-REACH-other-endpoints";
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><rect width="20" height="20" fill="white"/></svg>';
@@ -207,7 +208,7 @@ describe("provider-neutral raw agent loops", { concurrency: false }, () => {
 						if (transport.provider === "opencode-go") {
 							assert.match(request.headers.get("x-opencode-session") ?? "", /^[0-9a-f-]{36}$/);
 							assert.equal(request.headers.get("x-opencode-session"), requests[0]!.headers.get("x-opencode-session"));
-							assert.equal(request.headers.get("x-opencode-client"), "learnharness");
+							assert.equal(request.headers.get("x-opencode-client"), packageMetadata.name);
 						}
 						const url = new URL(request.url);
 						assert.equal(url.origin, transport.origin);

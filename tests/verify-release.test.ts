@@ -24,6 +24,14 @@ import {
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const script = path.join(repoRoot, "scripts", "verify-release.ts");
+const releaseYaml = require("js-yaml");
+function upstreamConfig() {
+ const config = releaseYaml.load(fs.readFileSync(path.join(repoRoot, "electron-builder.yml"), "utf8"));
+ return { ...config, productName: "LearnHarness", publish: [{ provider: "github", owner: "amosblomqvist", repo: "learnharness", releaseType: "draft" }] };
+}
+function upstreamPackage(version: string) {
+ return { ...JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")), name: "learnharness", version };
+}
 const VERSION = "0.2.0";
 const TAG = `v${VERSION}`;
 
@@ -152,9 +160,10 @@ describe("release gate — packaging-config drift guard", () => {
 	const realConfig = yaml.load(fs.readFileSync(path.join(repoRoot, "electron-builder.yml"), "utf8"));
 	const realPkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 
-	it("accepts the repository's real configuration", () => {
+	it("rejects the local fork configuration as an upstream release", () => {
 		const verdict = verifyConfigAssumptions(realConfig, realPkg);
-		assert.ok(verdict.ok, JSON.stringify(verdict, null, 2));
+		assert.ok(!verdict.ok);
+		assert.match(verdict.errors.join("\n"), /productName|publish/);
 	});
 
 	const drifts: Array<[string, (config: Record<string, unknown>) => void]> = [
@@ -171,9 +180,9 @@ describe("release gate — packaging-config drift guard", () => {
 	];
 	for (const [label, mutate] of drifts) {
 		it(`fails when ${label} drifts (expectations must be re-derived)`, () => {
-			const config = structuredClone(realConfig) as Record<string, unknown>;
+			const config = upstreamConfig() as Record<string, unknown>;
 			mutate(config);
-			const pkg = label === "package name" ? { ...realPkg, name: "other" } : realPkg;
+			const pkg = label === "package name" ? { ...upstreamPackage(VERSION), name: "other" } : upstreamPackage(VERSION);
 			const verdict = verifyConfigAssumptions(config, pkg);
 			assert.ok(!verdict.ok);
 			assert.match(verdict.errors.join("\n"), /expected names no longer hold|would not land in the draft|no longer "learnharness"|productName is /);
@@ -367,8 +376,8 @@ describe("release gate — CLI (offline, repo config)", () => {
 	// intentionally stay at 0.2.0. A release version bump must not break tests.
 	const VERSION = (JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as { version: string }).version;
 	const TAG = `v${VERSION}`;
-	const tsxImport = fileURLToPath(import.meta.resolve("tsx"));
-	function run(args: string[], cwd = repoRoot) {
+	const tsxImport = import.meta.resolve("tsx");
+	function run(args: string[], cwd = path.dirname(args[1]!)) {
 		return spawnSync(process.execPath, ["--import", tsxImport, script, ...args], {
 			cwd, encoding: "utf8", timeout: 60_000,
 		});
@@ -377,6 +386,8 @@ describe("release gate — CLI (offline, repo config)", () => {
 	function workspace(tagForm: "v" | "bare" = "v", version = VERSION) {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "lh-release-gate-"));
 		const release = healthyRelease(version, tagForm);
+		fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(upstreamPackage(version)));
+		fs.writeFileSync(path.join(root, "electron-builder.yml"), releaseYaml.dump(upstreamConfig()));
 		fs.writeFileSync(path.join(root, "releases.json"), JSON.stringify([release]));
 		fs.mkdirSync(path.join(root, "metadata"));
 		for (const [name, content] of Object.entries(healthyFeeds(version, release))) {
@@ -448,9 +459,9 @@ describe("release gate — CLI (offline, repo config)", () => {
 		const futureVersion = "12.3.4";
 		const { root } = workspace("v", futureVersion);
 		try {
-			const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+			const pkg = upstreamPackage(futureVersion);
 			fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ ...pkg, version: futureVersion }));
-			fs.copyFileSync(path.join(repoRoot, "electron-builder.yml"), path.join(root, "electron-builder.yml"));
+			fs.writeFileSync(path.join(root, "electron-builder.yml"), releaseYaml.dump(upstreamConfig()));
 			const result = run(["verify", path.join(root, "releases.json"), path.join(root, "metadata"), "--tag", `v${futureVersion}`], root);
 			assert.equal(result.status, 0, String(result.stderr));
 			assert.ok(result.stdout.includes(`OK: draft for v${futureVersion} is complete`));

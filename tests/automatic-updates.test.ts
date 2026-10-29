@@ -13,7 +13,7 @@ const mainFile = fileURLToPath(new URL("../electron/main.cjs", import.meta.url))
 const mainSource = readFileSync(mainFile, "utf8");
 const mainRequire = createRequire(mainFile);
 
-function fixture({ packaged = true, updaterMissing = false } = {}) {
+function fixture({ packaged = true, updaterMissing = false, feed = "https://updates.example.test/studio" } = {}) {
 	let settings: string | Error = JSON.stringify({ version: 1, general: { autoUpdate: true } });
 	const settingsReads: string[] = [];
 	const order: string[] = [];
@@ -24,6 +24,7 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 	let userData = "/fixture/custom-user-data";
 	let menu: { submenu?: { label?: string; click?: () => void }[] }[] = [];
 	class FakeUpdater extends EventEmitter {
+		setFeedURL() {}
 		checks = 0;
 		autoDownload = false;
 		autoInstallOnAppQuit = false;
@@ -100,7 +101,7 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 			};
 			return mainRequire(id);
 		},
-		process: { argv: [], env: { LH_DEV_URL: "http://127.0.0.1:9000" }, platform: "darwin", on() {} },
+		process: { argv: [], env: { LH_DEV_URL: "http://127.0.0.1:9000", LH_UPDATE_FEED: feed }, platform: "darwin", on() {} },
 		__dirname: path.dirname(mainFile), URL,
 		setInterval: (callback: () => void, delay: number) => intervals.push({ callback, delay }),
 		setTimeout() {},
@@ -121,13 +122,20 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 }
 
 describe("automatic-update preference gate", () => {
+	it("a fork without its own feed never loads or checks the upstream updater", async () => {
+		const f = fixture({ feed: "" });
+		f.run("setupAutoUpdater()");
+		await f.check(true);
+		assert.equal(f.updater.checks, 0);
+		assert.equal(f.state().status, "disabled");
+	});
 	it("explicit OFF skips automatic checks, but manual checks still run without reading the preference", async () => {
 		const f = fixture();
 		f.setSettings({ general: { autoUpdate: false } });
 		f.run("setupAutoUpdater()");
 		await f.check();
 		assert.equal(f.updater.checks, 0);
-		assert.deepEqual(f.settingsReads, ["/fixture/custom-user-data-dev/data/settings.json"]);
+		assert.deepEqual(f.settingsReads, [path.join("/fixture/custom-user-data-dev", "data", "settings.json")]);
 		await f.check(true);
 		assert.equal(f.updater.checks, 1);
 		assert.equal(f.settingsReads.length, 1);

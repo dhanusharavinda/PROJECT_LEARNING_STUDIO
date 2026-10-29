@@ -11,7 +11,7 @@
  */
 
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
+import fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -37,12 +37,18 @@ describe("AuthStore adapter", () => {
 		assert.equal(authStore.authVars().OPENROUTER_API_KEY, "sk-or-v1-abc");
 	});
 
-	it("the file is mode 0600 (secrets), also after rewrites", () => {
+	it("private file mode is requested on every atomic write and enforced on POSIX", (t) => {
+		const writes = t.mock.method(fs, "writeFileSync");
+		const modes = t.mock.method(fs, "chmodSync");
 		authStore.setAuthVar("DEEPGRAM_API_KEY", "d".repeat(40));
 		const first = fs.statSync(AUTH_FILE).mode & 0o777;
-		assert.equal(first, 0o600);
+		if (process.platform !== "win32") assert.equal(first, 0o600);
 		authStore.setAuthVar("DEEPGRAM_API_KEY", "e".repeat(40));
-		assert.equal(fs.statSync(AUTH_FILE).mode & 0o777, 0o600, "rewrite keeps 0600");
+		if (process.platform !== "win32") assert.equal(fs.statSync(AUTH_FILE).mode & 0o777, 0o600, "rewrite keeps 0600");
+		assert.equal(authStore.authVars().DEEPGRAM_API_KEY, "e".repeat(40));
+		assert.equal(writes.mock.calls.length, 2);
+		for (const call of writes.mock.calls) assert.equal((call.arguments[2] as { mode: number }).mode, 0o600);
+		for (const call of modes.mock.calls) assert.equal(call.arguments[1], 0o600);
 	});
 
 	it("set preserves unknown vars verbatim (forward-compat)", () => {

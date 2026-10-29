@@ -33,6 +33,7 @@ const { desktopAPIHeaders } = require("./desktop-api.cjs");
 const { openWebSubscriptionBrowser } = require("./web-subscription-browser.cjs");
 const { randomBytes } = require("node:crypto");
 const { spawn } = require("node:child_process");
+const { terminateWindowsTree } = require("./owned-process.cjs");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
@@ -42,7 +43,7 @@ const path = require("node:path");
 // renderer owns the number; this is the IPC widen target).
 const SIDEBAR_AUTOCLOSE = 928;
 
-const PRODUCT_NAME = "LearnHarness";
+const PRODUCT_NAME = "Learning Studio";
 
 // APP NAME → userData (owner, 2026-10-10): the Application Support dir is
 // exactly "LearnHarness" in dev AND packaged. Packaged Electron would
@@ -216,6 +217,7 @@ function startServer(port) {
 					PORT: String(port),
 					HOSTNAME: "127.0.0.1", // the server defaults to 0.0.0.0 — never
 					LH_DATA_DIR: DATA_DIR(),
+					LH_MANIMGX_PYTHON: process.env.LH_MANIMGX_PYTHON || path.join(process.resourcesPath, 'manimgx-runtime', 'python.exe'),
 					// The auth/keys store — the child reads AND writes this file itself
 					// (no env injection anymore: a spawn-time copy would shadow every
 					// settings-page key change until restart; env wins over file).
@@ -269,6 +271,11 @@ function killServer() {
 	if (!serverProcess) return;
 	const child = serverProcess;
 	serverProcess = null;
+	if (process.platform === "win32") {
+		try { terminateWindowsTree(child); }
+		catch (error) { log(`server tree shutdown failed: ${error.message}`); }
+		return;
+	}
 	child.kill("SIGTERM");
 	setTimeout(() => {
 		try {
@@ -504,6 +511,12 @@ function installUpdateNow() {
 }
 
 function setupAutoUpdater() {
+	// A fork must never replace itself with the upstream application.
+	if (!process.env.LH_UPDATE_FEED) {
+		log('auto-update: no Learning Studio feed configured');
+		reportUpdateStatus('disabled');
+		return;
+	}
 	if (!app.isPackaged) {
 		log("auto-update: dev build — updater disabled");
 		reportUpdateStatus("disabled");

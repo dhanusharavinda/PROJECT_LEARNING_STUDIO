@@ -1,3 +1,11 @@
+## Learning Studio, local Windows build
+
+This project combines LearnHarness teaching with a local ManimGX animated blackboard. Synapse remains a separate notebook.
+
+Run `dist/Learning Studio-0.4.0-studio.1-x64-setup.exe` to install the Windows application. You can play the sample board without an API key. When you have a DeepSeek key, add it inside the app and choose **Use recommended**, then **Save models**.
+
+See [the Learning Studio guide](docs/learning-studio.md) for setup, animation limits, lesson export, build instructions, and attribution. The original LearnHarness documentation follows.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lh_banner_dark.png">

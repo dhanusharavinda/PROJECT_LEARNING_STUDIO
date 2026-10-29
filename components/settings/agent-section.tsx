@@ -89,7 +89,7 @@ const SEARCH_ENGINES = ["tavily", "brave"] as const;
 
 /** The owner's final toggleable-tool list (confirm with the user before
  *  changing — the Teacher stream settled this 2026-09-19). */
-export const TOGGLE_TOOLS = ["research", "demo", "visual", "pdf"] as const;
+export const TOGGLE_TOOLS = ["research", "demo", "visual", "pdf", "animation"] as const;
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -758,7 +758,7 @@ export function AgentSection({
 				{TOGGLE_TOOLS.map((id) => (
 					<SettingsRow
 						key={id}
-						label={`Tool · ${id}`}
+						label={id === "animation" ? "Animated board" : `Tool · ${id}`}
 						testid={`tool-row-${id}`}
 					>
 						<Toggle
