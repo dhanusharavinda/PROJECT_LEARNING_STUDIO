@@ -40,6 +40,7 @@ const { ChatInputError, endsInFailedTurn, failedResponseAtEnd, inputAppends, par
 const { INTERRUPTED_TEXT, asAgentMessages, hasProbeDone, newHandoffMessage, newPlanBlockMessage, newUserMessage, reconstructRequestCause, toLlmMessages } = await import("../src/core/native-messages.ts");
 const { phaseAt3Lh } = await import("../src/core/phases.ts");
 const { newCompactionMarker } = await import("../src/core/compaction.ts");
+const { prepareDesktopUpdate, releaseDesktopUpdate } = await import("../src/server/update-admission.ts");
 
 after(() => {
 	fs.rmSync(scratch, { recursive: true, force: true });
@@ -128,6 +129,27 @@ function assertPreserved(before: LhMessage[], saved: LhMessage[]): void {
 }
 
 describe("failed-response Retry (issue #110)", () => {
+	it("a live teacher prevents updates until settlement and a prepared update refuses a new turn", { timeout: 5000 }, async () => {
+		let finish!: () => void; let started!: () => void;
+		const waiting = new Promise<void>(resolve => { finish = resolve; });
+		const entered = new Promise<void>(resolve => { started = resolve; });
+		const { engine } = scripted([async () => { started(); await waiting; return fauxAssistantMessage("Saved explanation."); }]);
+		const chat = createConfiguredChat("Test: update admission during teacher turn");
+		const running = turn(engine, chat.id, { type: "text", text: "Explain the planet order" });
+		await entered;
+		try { assert.deepEqual(prepareDesktopUpdate(), { ready: false, reason: "busy" }); }
+		finally { finish(); }
+		assert.equal((await running).status, 200);
+		assert.deepEqual(prepareDesktopUpdate(), { ready: true });
+		try {
+			const count = chatStore.getChat(chat.id)!.messages.length;
+			const blocked = await turn(engine, chat.id, { type: "text", text: "Another question" });
+			assert.equal(blocked.status, 409);
+			assert.match(await blocked.text(), /preparing to restart/);
+			assert.equal(chatStore.getChat(chat.id)!.messages.length, count);
+		} finally { releaseDesktopUpdate(); }
+	});
+
 	it("retries from the saved answer, preserving the full input and failed attempt", async () => {
 		const { engine, contexts, histories } = scripted([
 			() => fauxAssistantMessage([fauxToolCall("quiz", QUIZ_INPUT, { id: "call-1" })], { stopReason: "toolUse" }),

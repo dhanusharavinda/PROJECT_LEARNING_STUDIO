@@ -24,3 +24,6 @@ xai-credentials.json*
 work/
 .runtime/
 .env*
+
+# Reproducible offline Python assets, prepared from the pinned npm package.
+public/lab/python/

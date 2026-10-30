@@ -15,6 +15,7 @@ function run(file, args) {
   if (result.error || result.status !== 0) throw result.error || new Error(`${file} failed (${result.status})`);
 }
 if (!process.argv.includes("--pack-only")) {
+  run("scripts/prepare-lab-python.mjs", []);
   run("node_modules/next/dist/bin/next", ["build"]);
   run("scripts/build-server.mjs", []);
   run("scripts/smoke-server.mjs", ["--electron"]);

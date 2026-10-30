@@ -13,7 +13,7 @@ const mainFile = fileURLToPath(new URL("../electron/main.cjs", import.meta.url))
 const mainSource = readFileSync(mainFile, "utf8");
 const mainRequire = createRequire(mainFile);
 
-function fixture({ packaged = true, updaterMissing = false, feed = "https://updates.example.test/studio" } = {}) {
+function fixture({ packaged = true, updaterMissing = false, feed = "", dev = false, testProfile = false, testBuild = false, cacheFailure = false } = {}) {
 	let settings: string | Error = JSON.stringify({ version: 1, general: { autoUpdate: true } });
 	const settingsReads: string[] = [];
 	const order: string[] = [];
@@ -23,13 +23,24 @@ function fixture({ packaged = true, updaterMissing = false, feed = "https://upda
 	let enumerationFails = false;
 	let userData = "/fixture/custom-user-data";
 	let menu: { submenu?: { label?: string; click?: () => void }[] }[] = [];
+	let readiness: { ready: boolean; reason?: string } | Error = { ready: true };
+	const readinessRequests: { url: string; init: RequestInit }[] = [];
 	class FakeUpdater extends EventEmitter {
-		setFeedURL() {}
+		feed: unknown = null;
+		setFeedURL(value: unknown) { this.feed = JSON.parse(JSON.stringify(value)); }
 		checks = 0;
+		downloads = 0;
 		autoDownload = false;
 		autoInstallOnAppQuit = false;
 		result: object | null = { updateInfo: { version: "0.3.7" } };
 		failure: Error | null = null;
+		downloadFailure: Error | null = null;
+		async downloadUpdate() {
+			this.downloads++;
+			if (this.downloadFailure) throw this.downloadFailure;
+			this.emit("update-downloaded", { version: "0.5.1" });
+			return [];
+		}
 		checkForUpdates() {
 			this.checks++;
 			this.emit("checking-for-update");
@@ -83,11 +94,19 @@ function fixture({ packaged = true, updaterMissing = false, feed = "https://upda
 		app, BrowserWindow: FakeWindow,
 		Menu: { buildFromTemplate: (value: typeof menu) => value, setApplicationMenu: (value: typeof menu) => { menu = value; } },
 		ipcMain: { on() {}, handle: (channel: string, fn: (event: unknown) => unknown) => handles.set(channel, fn) },
-		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
+		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, webRequest: { onBeforeSendHeaders() {} } } },
 	};
 	const context = createContext({
 		require: (id: string) => {
 			if (id === "electron") return electron;
+			if (id === "./update-test-mode.cjs") return {
+				...mainRequire(id),
+				isUpdateTestBuild: () => testBuild,
+				resolveUpdateTestProfile: () => testProfile ? { profile: "/fixture/isolated", cacheName: "fixture-isolated" } : null,
+				prepareUpdateTestCache: () => { if (cacheFailure) throw new Error("fixture cache failure"); return "/fixture/isolated/update-test-config.yml"; },
+			};
+			if (id === "./chatgpt.cjs") return { createChatGPT: () => ({ close() {}, pause() {}, resume() {} }), fileStore: () => ({}) };
+			if (id === "./subscriptions.cjs") return { createSubscriptions: () => ({ ready: Promise.resolve(), close() {}, pause() {}, resume() {} }), loadSubscriptionSDK: () => ({}) };
 			if (id === "electron-updater") {
 				if (updaterMissing) throw new Error("missing updater");
 				return { autoUpdater: updater };
@@ -97,20 +116,28 @@ function fixture({ packaged = true, updaterMissing = false, feed = "https://upda
 					settingsReads.push(file);
 					if (settings instanceof Error) throw settings;
 					return settings;
-				}, mkdirSync() {}, appendFileSync() {},
+				}, mkdirSync() {}, appendFileSync() {}, existsSync() { return false; },
 			};
 			return mainRequire(id);
 		},
-		process: { argv: [], env: { LH_DEV_URL: "http://127.0.0.1:9000", LH_UPDATE_FEED: feed }, platform: "darwin", on() {} },
-		__dirname: path.dirname(mainFile), URL,
+		process: { argv: [], env: { ...(dev ? { LH_DEV_URL: "http://127.0.0.1:9000" } : {}), ...(testProfile ? { LH_UPGRADE_TEST_MODE: "check-download-only" } : {}), LH_UPDATE_FEED: feed }, platform: "darwin", resourcesPath: "/fixture/resources", on() {} },
+		__dirname: path.dirname(mainFile), URL, AbortSignal,
+		fetch: async (url: string, init: RequestInit) => {
+			readinessRequests.push({ url, init });
+			order.push(JSON.parse(String(init.body)).op);
+			if (readiness instanceof Error) throw readiness;
+			return { ok: true, json: async () => readiness };
+		},
 		setInterval: (callback: () => void, delay: number) => intervals.push({ callback, delay }),
 		setTimeout() {},
 		fixtureChild: { kill: (signal: string) => order.push(signal) },
 	});
 	runInContext(mainSource, context, { filename: mainFile });
 	const run = (code: string) => runInContext(code, context);
+	run('freePort = async () => 9000; startServer = async () => { serverProcess = fixtureChild; }; waitUntilUp = async () => {};');
 	return {
-		run, updater, windows, intervals, handles, settingsReads, order, app,
+		run, updater, windows, intervals, handles, settingsReads, order, app, readinessRequests,
+		setReadiness: (value: typeof readiness) => { readiness = value; },
 		setSettings: (value: unknown) => { settings = JSON.stringify(value); },
 		setSettingsFailure: (value: string | Error) => { settings = value; },
 		setEnumerationFailure: (value: boolean) => { enumerationFails = value; },
@@ -122,12 +149,12 @@ function fixture({ packaged = true, updaterMissing = false, feed = "https://upda
 }
 
 describe("automatic-update preference gate", () => {
-	it("a fork without its own feed never loads or checks the upstream updater", async () => {
+	it("a fork without a test override uses only its own explicit GitHub repository", async () => {
 		const f = fixture({ feed: "" });
 		f.run("setupAutoUpdater()");
 		await f.check(true);
-		assert.equal(f.updater.checks, 0);
-		assert.equal(f.state().status, "disabled");
+		assert.equal(f.updater.checks, 1);
+		assert.deepEqual(f.updater.feed, { provider: "github", owner: "dhanusharavinda", repo: "PROJECT_LEARNING_STUDIO", channel: "latest" });
 	});
 	it("explicit OFF skips automatic checks, but manual checks still run without reading the preference", async () => {
 		const f = fixture();
@@ -135,12 +162,12 @@ describe("automatic-update preference gate", () => {
 		f.run("setupAutoUpdater()");
 		await f.check();
 		assert.equal(f.updater.checks, 0);
-		assert.deepEqual(f.settingsReads, [path.join("/fixture/custom-user-data-dev", "data", "settings.json")]);
+		assert.deepEqual(f.settingsReads, [path.join("/fixture/custom-user-data", "data", "settings.json")]);
 		await f.check(true);
 		assert.equal(f.updater.checks, 1);
 		assert.equal(f.settingsReads.length, 1);
-		assert.equal(f.updater.autoDownload, true);
-		assert.equal(f.updater.autoInstallOnAppQuit, true);
+		assert.equal(f.updater.autoDownload, false);
+		assert.equal(f.updater.autoInstallOnAppQuit, false);
 	});
 
 	for (const [label, setting] of [
@@ -186,7 +213,7 @@ describe("status observation never controls the updater", () => {
 		const f = fixture(); const win = f.window(); f.run("setupAutoUpdater()");
 		f.updater.emit("checking-for-update"); assert.equal(f.state().status, "checking");
 		f.updater.emit("update-available", { version: "0.3.8" });
-		assert.equal(f.state().status, "downloading"); assert.equal(f.state().version, "0.3.8");
+		assert.equal(f.state().status, "available"); assert.equal(f.state().version, "0.3.8");
 		f.updater.emit("update-downloaded", { version: "0.3.8" });
 		const ready = f.state();
 		await f.check();
@@ -229,15 +256,15 @@ describe("status observation never controls the updater", () => {
 		assert.equal(f.updater.checks, 3);
 	});
 
-	it("OFF does not cancel in-flight events or alter staging/install-on-quit; Restart kills server first", async () => {
-		const f = fixture(); f.run("setupAutoUpdater()");
+	it("OFF does not erase a staged update; Restart checks readiness and kills server before installing", async () => {
+		const f = fixture(); await f.run("main()");
 		f.updater.emit("update-available", { version: "0.3.8" });
 		f.setSettings({ general: { autoUpdate: false } });
 		f.updater.emit("update-downloaded", { version: "0.3.8" }); await f.check();
-		assert.equal(f.state().status, "downloaded"); assert.equal(f.updater.checks, 0);
-		assert.equal(f.updater.autoDownload, true); assert.equal(f.updater.autoInstallOnAppQuit, true);
-		f.run("serverProcess = fixtureChild; installUpdateNow()");
-		assert.deepEqual(f.order, ["SIGTERM", "install"]);
+		assert.equal(f.state().status, "downloaded"); assert.equal(f.updater.checks, 1);
+		assert.equal(f.updater.autoDownload, false); assert.equal(f.updater.autoInstallOnAppQuit, false);
+		await f.run("installUpdateNow()");
+		assert.deepEqual(f.order, ["prepare", "SIGTERM", "install"]);
 	});
 });
 
@@ -303,5 +330,118 @@ describe("startup, timer, trusted IPC and menu wiring", () => {
 		const f = fixture(); f.setSettings({ general: { autoUpdate: false } }); await f.run("main()");
 		f.windows[0]!.webContents.fails = true; f.windows[0]!.webContents.loading = false;
 		f.menuCheck(); assert.equal(f.updater.checks, 1);
+	});
+});
+
+describe("explicit update actions and protected restart", () => {
+	it("a production check-only profile isolates cache and cannot reach readiness, shutdown or install", async () => {
+		const f = fixture({ testProfile: true }); await f.run("main()");
+		assert.equal(f.app.getPath(), "/fixture/isolated");
+		assert.equal(f.run("autoUpdater.updateConfigPath"), "/fixture/isolated/update-test-config.yml");
+		f.updater.emit("update-available", { version: "0.5.1" });
+		await f.run("downloadUpdate()");
+		assert.equal(f.updater.downloads, 1);
+		await f.run("installUpdateNow()");
+		assert.equal(f.state().actionError, "test-profile");
+		assert.deepEqual(f.order, []);
+		assert.equal(f.readinessRequests.length, 0);
+		assert.equal(f.updater.autoInstallOnAppQuit, false);
+	});
+	it("failed cache isolation disables the test-profile updater", async () => {
+		const f = fixture({ testProfile: true, cacheFailure: true });
+		f.run("setupAutoUpdater()"); await f.check(true);
+		assert.equal(f.state().status, "disabled"); assert.equal(f.updater.checks, 0);
+	});
+	it("an isolated installer identity cannot fall back to the production GitHub feed", async () => {
+		const f = fixture({ testBuild: true }); f.run("setupAutoUpdater()"); await f.check(true);
+		assert.equal(f.state().status, "disabled"); assert.equal(f.updater.feed, null);
+		const local = fixture({ testBuild: true, feed: "http://127.0.0.1:9222/" });
+		local.run("setupAutoUpdater()"); await local.check(true);
+		assert.equal(local.updater.checks, 1);
+		assert.deepEqual(local.updater.feed, { provider: "generic", url: "http://127.0.0.1:9222/" });
+	});
+	it("a packaged external development shell still cannot update", async () => {
+		const f = fixture({ dev: true }); f.run("setupAutoUpdater()"); await f.check(true);
+		assert.equal(f.state().status, "disabled"); assert.equal(f.updater.checks, 0);
+	});
+
+	it("accepts only loopback HTTP as the release-drill override", () => {
+		const local = fixture({ feed: "http://127.0.0.1:9222/updates/" }); local.run("setupAutoUpdater()");
+		assert.deepEqual(local.updater.feed, { provider: "generic", url: "http://127.0.0.1:9222/updates/" });
+		for (const feed of ["https://upstream.example/releases", "http://localhost@remote.example/", "http://name:secret@localhost/", "invalid"]) {
+			const f = fixture({ feed }); f.run("setupAutoUpdater()");
+			assert.equal(f.state().status, "disabled"); assert.equal(f.updater.feed, null);
+		}
+	});
+
+	it("checking never downloads, Download requires an available result, and download failure is retryable", async () => {
+		const f = fixture(); f.run("setupAutoUpdater()");
+		await f.run("downloadUpdate()"); assert.equal(f.updater.downloads, 0);
+		await f.check(true); assert.equal(f.updater.downloads, 0);
+		f.updater.emit("update-available", { version: "0.5.1" });
+		assert.equal(f.state().status, "available"); assert.equal(f.updater.downloads, 0);
+		f.updater.downloadFailure = new Error("private diagnostics");
+		await f.run("downloadUpdate()");
+		assert.equal(f.state().status, "available"); assert.equal(f.state().actionError, "download");
+		assert.ok(!JSON.stringify(f.state()).includes("private"));
+		f.updater.downloadFailure = null; await f.run("downloadUpdate()");
+		assert.equal(f.updater.downloads, 2); assert.equal(f.state().status, "downloaded");
+		await f.run("downloadUpdate()"); assert.equal(f.updater.downloads, 2);
+		assert.equal(f.updater.autoInstallOnAppQuit, false);
+	});
+
+	it("download progress is bounded and never fabricates an installed version", () => {
+		const f = fixture(); f.run("setupAutoUpdater()"); f.updater.emit("update-available", { version: "0.5.1" });
+		f.updater.emit("download-progress", { percent: 23.7 }); assert.equal(f.state().progress, 24);
+		f.updater.emit("download-progress", { percent: 120 }); assert.equal(f.state().progress, 100);
+		f.updater.emit("download-progress", { percent: NaN }); assert.equal(f.state().progress, null);
+		assert.equal(f.state().status, "downloading");
+	});
+
+	it("install cannot run before a real downloaded event", async () => {
+		const f = fixture(); await f.run("main()");
+		await f.run('reportUpdateStatus("downloaded", "0.5.1"); installUpdateNow()');
+		assert.deepEqual(f.order, []); assert.equal(f.readinessRequests.length, 0);
+	});
+
+	it("busy or unreachable server preserves the app and staged update, then permits a later idle restart", async () => {
+		const f = fixture(); await f.run("main()"); f.updater.emit("update-downloaded", { version: "0.5.1" });
+		f.setReadiness({ ready: false, reason: "busy" }); await f.run("installUpdateNow()");
+		assert.equal(f.state().actionError, "busy"); assert.deepEqual(f.order, ["prepare"]);
+		f.setReadiness(new Error("server unavailable")); await f.run("installUpdateNow()");
+		assert.equal(f.state().actionError, "readiness"); assert.ok(!f.order.includes("SIGTERM"));
+		f.setReadiness({ ready: true }); await f.run("installUpdateNow()");
+		assert.deepEqual(f.order.slice(-3), ["prepare", "SIGTERM", "install"]);
+		const request = f.readinessRequests.at(-1)!;
+		assert.equal(request.url, "http://127.0.0.1:9000/api/desktop/update-readiness");
+		assert.equal(request.init.redirect, "error");
+		assert.ok((request.init.headers as Record<string, string>)["x-learnharness-desktop"]);
+	});
+
+	it("download and install IPC reject foreign windows, child frames and navigated frames", async () => {
+		const f = fixture(); await f.run("main()"); const sender = f.windows[0]!.webContents;
+		for (const channel of ["lh:update:download", "lh:update-install"]) {
+			const action = f.handles.get(channel)!;
+			assert.throws(() => action({ sender: {}, senderFrame: sender.mainFrame }), /Untrusted/);
+			assert.throws(() => action({ sender, senderFrame: { url: sender.mainFrame.url } }), /Untrusted/);
+			sender.mainFrame.url = "https://untrusted.invalid/";
+			assert.throws(() => action({ sender, senderFrame: sender.mainFrame }), /Untrusted/);
+			sender.mainFrame.url = "http://127.0.0.1:9000/";
+		}
+		assert.equal(f.updater.downloads, 0); assert.equal(f.readinessRequests.length, 0);
+	});
+
+	it("a failed owned-server shutdown releases admission and never launches the installer", async () => {
+		const f = fixture(); await f.run("main()"); f.updater.emit("update-downloaded", { version: "0.5.1" });
+		f.run('killServer = () => { throw new Error("shutdown failed"); }');
+		await f.run("installUpdateNow()");
+		assert.deepEqual(f.order, ["prepare", "release"]);
+		assert.equal(f.state().status, "downloaded"); assert.equal(f.state().actionError, "readiness");
+	});
+
+	it("an installation already handed to the updater cannot be launched twice", async () => {
+		const f = fixture(); await f.run("main()"); f.updater.emit("update-downloaded", { version: "0.5.1" });
+		await f.run("installUpdateNow()"); await f.run("installUpdateNow()");
+		assert.deepEqual(f.order, ["prepare", "SIGTERM", "install"]);
 	});
 });

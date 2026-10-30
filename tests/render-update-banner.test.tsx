@@ -76,6 +76,7 @@ describe("update banner (Wave C)", () => {
 		const button = host.querySelector<HTMLButtonElement>("[data-testid='update-banner'] button");
 		assert.ok(button, "restart button exists");
 		button!.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		assert.equal(installed, 1, "Restart asks the shell to quit-and-install");
 		root.unmount();
 		host.remove();

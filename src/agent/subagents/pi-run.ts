@@ -34,6 +34,8 @@ export interface SubagentRunOptions {
 	abortSignal?: AbortSignal;
 	/** Money channel: one call per model request. */
 	onUsage?: (usage: Usage) => void;
+	/** Visible assistant text only, excluding thinking and tool arguments. */
+	onTextDelta?: (text: string) => void;
 	/** Activity line per tool execution (job record progress). */
 	onToolStart?: (toolName: string, args: unknown) => void;
 	/** Per completed assistant message (extraction's step log). */
@@ -103,6 +105,9 @@ export async function runSubagent(tools: AgentTool<any, any>[], opts: SubagentRu
 		opts.abortSignal?.throwIfAborted();
 		agent.subscribe((event: AgentEvent) => {
 			switch (event.type) {
+				case "message_update":
+					if (event.assistantMessageEvent.type === "text_delta") opts.onTextDelta?.(event.assistantMessageEvent.delta);
+					break;
 				case "message_end":
 					if ((event.message as { role?: string }).role === "assistant") {
 						const m = event.message as AssistantMessage;

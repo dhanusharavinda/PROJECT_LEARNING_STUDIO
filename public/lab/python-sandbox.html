@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; connect-src blob:; img-src 'none'; style-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Isolated Python exercise</title>
+<script>
+/* This document runs in an opaque sandbox. No app origin, storage or keys. */
+let active = false;
+addEventListener('message', event => {
+  if (event.source !== parent || active || event.data?.type !== 'lab-init') return;
+  active = true;
+  const { token, workerSource, ...payload } = event.data;
+  const fail = error => parent.postMessage({ type: 'result', token, results: [], stdout: '', durationMs: 0, error }, '*');
+  addEventListener('securitypolicyviolation', event => fail(`Python sandbox blocked ${event.violatedDirective}.`));
+  const source = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
+  let worker;
+  // A classic bootstrap supports dynamic module imports while avoiding the
+  // module-worker entry request failure in an opaque-origin iframe.
+  try { worker = new Worker(source); }
+  catch (error) { URL.revokeObjectURL(source); fail(`Python worker could not start: ${error.message || error}`); return; }
+  worker.onmessage = e => parent.postMessage({ ...e.data, token }, '*');
+  worker.onerror = e => fail(`Python worker failed${e.message ? `: ${e.message}` : ' before initialization.'}${e.lineno ? ` (line ${e.lineno})` : ''}`);
+  worker.postMessage(payload);
+  addEventListener('pagehide', () => { worker.terminate(); URL.revokeObjectURL(source); }, { once: true });
+});
+parent.postMessage({ type: 'lab-ready' }, '*');
+</script>

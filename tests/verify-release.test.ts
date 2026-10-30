@@ -1,11 +1,4 @@
-/**
- * The final release gate (scripts/verify-release.ts) — pure-function tests
- * plus CLI end-to-end runs, all offline against fixtures. The expected asset
- * names asserted here are the ones verified against the INSTALLED
- * app-builder-lib 26.15.3 (see the script header for the derivation):
- * 11 assets — 4 installers (dmg / NSIS exe / AppImage / deb), the mac
- * updater ZIP, its/exe/dmg blockmaps, and the three latest*.yml feeds.
- */
+/** Windows release gate tests using offline release and updater fixtures. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -14,6 +7,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { runInNewContext } from "node:vm";
+import { createHash } from "node:crypto";
 
 import {
 	checkVersion, expectedAssets, feedExpectations, isPlainAssetName, normalizeReleasePages,
@@ -25,13 +20,14 @@ const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const script = path.join(repoRoot, "scripts", "verify-release.ts");
 const releaseYaml = require("js-yaml");
-function upstreamConfig() {
- const config = releaseYaml.load(fs.readFileSync(path.join(repoRoot, "electron-builder.yml"), "utf8"));
- return { ...config, productName: "LearnHarness", publish: [{ provider: "github", owner: "amosblomqvist", repo: "learnharness", releaseType: "draft" }] };
+function studioConfig() {
+	return {
+		appId: "com.synapse.learningstudio", productName: "Learning Studio",
+		win: { artifactName: "Learning-Studio-${version}-${arch}-setup.${ext}", target: [{ target: "nsis", arch: ["x64"] }] },
+		publish: [{ provider: "github", owner: "dhanusharavinda", repo: "PROJECT_LEARNING_STUDIO", releaseType: "draft", channel: "latest" }],
+	};
 }
-function upstreamPackage(version: string) {
- return { ...JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")), name: "learnharness", version };
-}
+function studioPackage(version: string) { return { name: "learning-studio", version }; }
 const VERSION = "0.2.0";
 const TAG = `v${VERSION}`;
 
@@ -42,7 +38,7 @@ function asset(id: number, name: string, overrides: Partial<ReleaseAsset> = {}):
 	return { id, name, size: 5000, state: "uploaded", ...overrides };
 }
 
-/** The complete, healthy 11-asset draft for a version. */
+/** The complete, healthy 4-asset draft for a version. */
 function healthyRelease(version: string, tagForm: "v" | "bare" = "v"): ReleaseRecord {
 	const e = expectedAssets(version);
 	return {
@@ -53,7 +49,7 @@ function healthyRelease(version: string, tagForm: "v" | "bare" = "v"): ReleaseRe
 	};
 }
 
-/** The three update feeds exactly as app-builder-lib writes them. */
+/** The Windows update feed exactly as app-builder-lib writes them. */
 function healthyFeeds(version: string, release: ReleaseRecord): Record<string, string> {
 	const byName = new Map(release.assets.map((entry) => [entry.name, entry]));
 	const feeds: Record<string, string> = {};
@@ -71,20 +67,13 @@ function healthyFeeds(version: string, release: ReleaseRecord): Record<string, s
 	return feeds;
 }
 
-describe("release gate — expected asset inventory", () => {
-	it("is exactly the 11 verified builder outputs for the version", () => {
-		assert.deepEqual(expectedAssets(VERSION).files, [
-			"LearnHarness-0.2.0-arm64.dmg",
-			"LearnHarness-0.2.0-arm64-mac.zip",
-			"LearnHarness-0.2.0-x64-setup.exe",
-			"LearnHarness-0.2.0-x86_64.AppImage",
-			"LearnHarness-0.2.0-amd64.deb",
-			"LearnHarness-0.2.0-arm64.dmg.blockmap",
-			"LearnHarness-0.2.0-arm64-mac.zip.blockmap",
-			"LearnHarness-0.2.0-x64-setup.exe.blockmap",
-			"latest-mac.yml",
+describe("release gate , expected asset inventory", () => {
+	it("is exactly the four required release outputs for the version", () => {
+        assert.deepEqual(expectedAssets(VERSION).files, [
+			"Learning-Studio-0.2.0-x64-setup.exe",
+			"Learning-Studio-0.2.0-x64-setup.exe.blockmap",
 			"latest.yml",
-			"latest-linux.yml",
+			"Learning-Studio-0.2.0-source.zip",
 		]);
 	});
 
@@ -97,7 +86,7 @@ describe("release gate — expected asset inventory", () => {
 	});
 });
 
-describe("release gate — release-list parsing", () => {
+describe("release gate , release-list parsing", () => {
 	it("flattens gh --paginate --slurp pages and accepts a plain array", () => {
 		const release = healthyRelease(VERSION);
 		const paged = normalizeReleasePages([[release], [], [release]]);
@@ -121,7 +110,7 @@ describe("release gate — release-list parsing", () => {
 	});
 });
 
-describe("release gate — draft selection (fail-closed, existing tag matching)", () => {
+describe("release gate , draft selection (fail-closed, existing tag matching)", () => {
 	it("selects the single draft carrying the v-tag", () => {
 		const selection = selectDraft([healthyRelease(VERSION)], TAG, VERSION);
 		assert.ok(selection.ok && selection.release.id === 42 && selection.warnings.length === 0);
@@ -141,7 +130,7 @@ describe("release gate — draft selection (fail-closed, existing tag matching)"
 		assert.match(selection.errors.join("\n"), /no release matches/);
 	});
 
-	it("fails when the match is already published — never modifies it", () => {
+	it("fails when the match is already published , never modifies it", () => {
 		const published = { ...healthyRelease(VERSION), draft: false };
 		const selection = selectDraft([published], TAG, VERSION);
 		assert.ok(!selection.ok);
@@ -155,50 +144,42 @@ describe("release gate — draft selection (fail-closed, existing tag matching)"
 	});
 });
 
-describe("release gate — packaging-config drift guard", () => {
-	const yaml = require("js-yaml") as { load(source: string): unknown };
-	const realConfig = yaml.load(fs.readFileSync(path.join(repoRoot, "electron-builder.yml"), "utf8"));
-	const realPkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-
-	it("rejects the local fork configuration as an upstream release", () => {
-		const verdict = verifyConfigAssumptions(realConfig, realPkg);
-		assert.ok(!verdict.ok);
-		assert.match(verdict.errors.join("\n"), /productName|publish/);
+describe("release gate, packaging configuration", () => {
+	it("accepts the Windows fork configuration", () => {
+		assert.ok(verifyConfigAssumptions(studioConfig(), studioPackage(VERSION)).ok);
 	});
-
-	const drifts: Array<[string, (config: Record<string, unknown>) => void]> = [
-		["linux artifactName", (config) => { (config.linux as Record<string, unknown>).artifactName = "${name}-${version}-${arch}.${ext}"; }],
-		["win artifactName", (config) => { (config.win as Record<string, unknown>).artifactName = "${productName}-${version}-setup.${ext}"; }],
-		["mac artifactName", (config) => { (config.mac as Record<string, unknown>).artifactName = "${productName}-${version}.${ext}"; }],
-		["top-level artifactName", (config) => { config.artifactName = "${name}-${version}.${ext}"; }],
-		["productName", (config) => { config.productName = "learnharness"; }],
-		["mac targets", (config) => { (config.mac as Record<string, unknown>).target = [{ target: "dmg", arch: ["arm64"] }]; }],
-		["win target", (config) => { (config.win as Record<string, unknown>).target = [{ target: "appx", arch: ["x64"] }]; }],
-		["linux targets", (config) => { (config.linux as Record<string, unknown>).target = [{ target: "AppImage", arch: ["x64"] }]; }],
-		["publish provider", (config) => { config.publish = [{ provider: "github", releaseType: "prerelease" }]; }],
-		["package name", () => { /* pkg checked below */ }],
+	const drifts: Array<[string, (config: ReturnType<typeof studioConfig>) => void]> = [
+		["artifact name", c => { c.win.artifactName = "upstream-${version}.exe"; }],
+		["target", c => { c.win.target = [{ target: "appx", arch: ["x64"] }]; }],
+		["product name", c => { c.productName = "LearnHarness"; }],
+		["application identity", c => { c.appId = "upstream.app"; }],
+		["owner", c => { c.publish[0]!.owner = "amosblomqvist"; }],
+		["repository", c => { c.publish[0]!.repo = "learnharness"; }],
+		["published release", c => { c.publish[0]!.releaseType = "release"; }],
+		["channel", c => { c.publish[0]!.channel = "beta"; }],
 	];
-	for (const [label, mutate] of drifts) {
-		it(`fails when ${label} drifts (expectations must be re-derived)`, () => {
-			const config = upstreamConfig() as Record<string, unknown>;
-			mutate(config);
-			const pkg = label === "package name" ? { ...upstreamPackage(VERSION), name: "other" } : upstreamPackage(VERSION);
-			const verdict = verifyConfigAssumptions(config, pkg);
-			assert.ok(!verdict.ok);
-			assert.match(verdict.errors.join("\n"), /expected names no longer hold|would not land in the draft|no longer "learnharness"|productName is /);
-		});
-	}
+	for (const [name, mutate] of drifts) it(`rejects drift in ${name}`, () => {
+		const config = studioConfig(); mutate(config);
+		assert.ok(!verifyConfigAssumptions(config, studioPackage(VERSION)).ok);
+	});
+	it("rejects a missing source archive", () => {
+		const release = healthyRelease(VERSION);
+		release.assets = release.assets.filter(a => a.name !== expectedAssets(VERSION).source);
+		const verdict = verifyAssets(release, expectedAssets(VERSION));
+		assert.ok(!verdict.ok);
+		assert.match(verdict.errors.join("\n"), /source.zip: missing/);
+	});
 });
 
-describe("release gate — asset inventory", () => {
+describe("release gate , asset inventory", () => {
 	it("passes a complete draft and names every deviation", () => {
 		assert.ok(verifyAssets(healthyRelease(VERSION), expectedAssets(VERSION)).ok);
 		const release = healthyRelease(VERSION);
-		release.assets = release.assets.filter((entry) => entry.name !== "LearnHarness-0.2.0-x64-setup.exe.blockmap");
-		release.assets.push(asset(9999, "LearnHarness-0.2.0-x64.AppImage"));
-		release.assets.push(asset(9998, "LearnHarness-0.1.0-x64-setup.exe"));
-		release.assets.push(asset(9997, "LearnHarness-0.2.0-arm64.dmg", { size: 0 }));
-		release.assets.push(asset(9996, "LearnHarness-0.2.0-arm64.dmg", { state: "starter" }));
+		release.assets = release.assets.filter((entry) => entry.name !== "Learning-Studio-0.2.0-x64-setup.exe.blockmap");
+		release.assets.push(asset(9999, "Learning-Studio-0.2.0-x64.AppImage"));
+		release.assets.push(asset(9998, "Learning-Studio-0.1.0-x64-setup.exe"));
+		release.assets.push(asset(9997, "Learning-Studio-0.2.0-arm64.dmg", { size: 0 }));
+		release.assets.push(asset(9996, "Learning-Studio-0.2.0-arm64.dmg", { state: "starter" }));
 		const verdict = verifyAssets(release, expectedAssets(VERSION));
 		assert.ok(!verdict.ok);
 		const joined = verdict.errors.join("\n");
@@ -211,43 +192,20 @@ describe("release gate — asset inventory", () => {
 	});
 });
 
-describe("release gate — updater reference hygiene", () => {
+describe("release gate , updater reference hygiene", () => {
 	it("accepts bare asset names only", () => {
-		assert.ok(isPlainAssetName("LearnHarness-0.2.0-arm64.dmg"));
-		for (const bad of ["", ".", "..", "../LearnHarness.zip", "dist/LearnHarness.zip", "https://evil.example/app.zip",
+		assert.ok(isPlainAssetName("Learning-Studio-0.2.0-arm64.dmg"));
+		for (const bad of ["", ".", "..", "../Learning-Studio.zip", "dist/Learning-Studio.zip", "https://evil.example/app.zip",
 			"http://evil.example/app.zip", "file:///etc/passwd", "C:\\app.zip", "~x/app.zip", "app.zip?q=1", "app.zip#x"]) {
 			assert.equal(isPlainAssetName(bad), false, bad);
 		}
 	});
 });
 
-describe("release gate — update feeds", () => {
+describe("release gate , update feeds", () => {
 	it("accepts the healthy feeds for the complete draft", () => {
 		const release = healthyRelease(VERSION);
 		const verdict = verifyMetadataFiles(healthyFeeds(VERSION, release), release, expectedAssets(VERSION));
-		assert.ok(verdict.ok, JSON.stringify(verdict, null, 2));
-	});
-
-	it("accepts either AppImage/deb order in latest-linux.yml (builder order is not deterministic)", () => {
-		const release = healthyRelease(VERSION);
-		const e = expectedAssets(VERSION);
-		const feeds = healthyFeeds(VERSION, release);
-		// Same content, deb entry first (writeUpdateInfoFiles keeps whichever
-		// target finished first; the gate must accept both).
-		feeds["latest-linux.yml"] = [
-			`version: ${VERSION}`,
-			"files:",
-			`  - url: ${e.linux.deb}`,
-			`    sha512: ${sha512(e.linux.deb)}`,
-			"    size: 5000",
-			`  - url: ${e.linux.appImage}`,
-			`    sha512: ${sha512(e.linux.appImage)}`,
-			"    size: 5000",
-			`path: ${e.linux.deb}`,
-			`sha512: ${sha512(e.linux.deb)}`,
-			"releaseDate: '2026-10-13T09:37:13.265Z'",
-		].join("\n") + "\n";
-		const verdict = verifyMetadataFiles(feeds, release, expectedAssets(VERSION));
 		assert.ok(verdict.ok, JSON.stringify(verdict, null, 2));
 	});
 
@@ -265,36 +223,22 @@ describe("release gate — update feeds", () => {
 		}, /is not a bare asset name/],
 		["reference to an asset the release does not hold", (feeds) => {
 			const e = expectedAssets(VERSION);
-			feeds["latest.yml"] = feeds["latest.yml"]!.replace(`url: ${e.win.exe}`, "url: LearnHarness-0.1.0-x64-setup.exe");
-		}, /references "LearnHarness-0\.1\.0-x64-setup\.exe" which is not an asset/],
+			feeds["latest.yml"] = feeds["latest.yml"]!.replace(`url: ${e.win.exe}`, "url: Learning-Studio-0.1.0-x64-setup.exe");
+		}, /references "Learning-Studio-0\.1\.0-x64-setup\.exe" which is not an asset/],
 		["size disagreeing with the uploaded asset", (feeds) => {
 			const e = expectedAssets(VERSION);
 			feeds["latest.yml"] = feeds["latest.yml"]!.replace("size: 5000", "size: 4999");
 			void e;
 		}, /size 4999 ≠ release asset size 5000/],
-		["mac ZIP not first (legacy path/sha512 would mislead the updater)", (feeds) => {
-			const e = expectedAssets(VERSION);
-			feeds["latest-mac.yml"] = feeds["latest-mac.yml"]!.replace(
-				`files:\n  - url: ${e.mac.zip}\n    sha512: ${sha512(e.mac.zip)}\n    size: 5000\n  - url: ${e.mac.dmg}\n    sha512: ${sha512(e.mac.dmg)}\n    size: 5000\n`,
-				`files:\n  - url: ${e.mac.dmg}\n    sha512: ${sha512(e.mac.dmg)}\n    size: 5000\n  - url: ${e.mac.zip}\n    sha512: ${sha512(e.mac.zip)}\n    size: 5000\n`,
-			).replace(`path: ${e.mac.zip}\nsha512: ${sha512(e.mac.zip)}\n`, `path: ${e.mac.dmg}\nsha512: ${sha512(e.mac.dmg)}\n`);
-		}, /files\[0\] must be/],
-		["mac legacy path pointing away from files[0]", (feeds) => {
-			const e = expectedAssets(VERSION);
-			feeds["latest-mac.yml"] = feeds["latest-mac.yml"]!.replace(`path: ${e.mac.zip}`, `path: ${e.mac.dmg}`);
+		["legacy path pointing away from files[0]", feeds => {
+			feeds["latest.yml"] = feeds["latest.yml"]!.replace(`path: ${expectedAssets(VERSION).win.exe}`, "path: other.exe");
 		}, /top-level path is/],
-		["mac legacy sha512 not matching files[0]", (feeds) => {
-			feeds["latest-mac.yml"] = feeds["latest-mac.yml"]!.replace(`sha512: ${sha512("LearnHarness-0.2.0-arm64-mac.zip")}\nreleaseDate`, `sha512: ${sha512("tampered")}\nreleaseDate`);
+		["legacy sha512 not matching files[0]", feeds => {
+			feeds["latest.yml"] = feeds["latest.yml"]!.replace(`sha512: ${sha512(expectedAssets(VERSION).win.exe)}\nreleaseDate`, `sha512: ${sha512("tampered")}\nreleaseDate`);
 		}, /top-level sha512 does not match/],
-		["missing deb entry in latest-linux.yml", (feeds) => {
-			const e = expectedAssets(VERSION);
-			feeds["latest-linux.yml"] = feeds["latest-linux.yml"]!.replace(
-				`  - url: ${e.linux.deb}\n    sha512: ${sha512(e.linux.deb)}\n    size: 5000\n`, "",
-			).replace(`path: ${e.linux.appImage}`, `path: ${e.linux.appImage}`);
-		}, /must reference exactly/],
 		["extra entry in latest.yml", (feeds) => {
 			const e = expectedAssets(VERSION);
-			feeds["latest.yml"] = feeds["latest.yml"]!.replace("path:", `  - url: ${e.mac.zip}\n    sha512: ${sha512(e.mac.zip)}\n    size: 5000\npath:`);
+			feeds["latest.yml"] = feeds["latest.yml"]!.replace("path:", `  - url: ${e.source}\n    sha512: ${sha512(e.source)}\n    size: 5000\npath:`);
 		}, /must reference exactly/],
 		["garbage sha512", (feeds) => {
 			const e = expectedAssets(VERSION);
@@ -302,7 +246,7 @@ describe("release gate — update feeds", () => {
 		}, /sha512 is not a base64 digest/],
 		["unparseable feed", (feeds) => { feeds["latest.yml"] = "\tversion: [unclosed"; }, /does not parse as YAML/],
 		["non-mapping feed", (feeds) => { feeds["latest.yml"] = "- just\n- a\n- list\n"; }, /top level is not a mapping/],
-		["feed not downloaded", (feeds) => { delete feeds["latest-linux.yml"]; }, /not downloaded/],
+		["feed not downloaded", (feeds) => { delete feeds["latest.yml"]; }, /not downloaded/],
 	];
 	for (const [label, mutate, pattern] of mutations) {
 		it(`fails on ${label}`, () => {
@@ -316,10 +260,44 @@ describe("release gate — update feeds", () => {
 	}
 });
 
-describe("release gate — workflow wiring", () => {
+describe("release gate , workflow wiring", () => {
 	const yaml = require("js-yaml") as { load(source: string): any };
 	const workflow = yaml.load(fs.readFileSync(path.join(repoRoot, ".github", "workflows", "release.yml"), "utf8"));
 	const verify = workflow.jobs.verify;
+
+	it("builds the portable Windows payload before any release upload", () => {
+		const job = workflow.jobs.package;
+		assert.equal(job["runs-on"], "windows-2025");
+		assert.equal(job.strategy, undefined);
+		const prepare = job.steps.findIndex((step: any) => step.run?.includes("setup-manimgx.ps1"));
+		const build = job.steps.findIndex((step: any) => step.run?.includes("electron-builder"));
+		const upload = job.steps.findIndex((step: any) => step.run?.includes("gh release upload"));
+		assert.ok(prepare >= 0 && build > prepare && upload > build);
+		assert.match(job.steps[build].run, /--win --x64 --publish never/);
+		assert.equal(job.steps[upload].if, "github.event_name == 'push'");
+		assert.match(job.steps[upload].run, /isDraft/);
+		for (const step of job.steps.slice(0, upload)) assert.equal(step.env?.GH_TOKEN, undefined);
+		assert.ok(job.steps.some((step: any) => step.uses === "actions/setup-python@v6" && step.with["python-version"] === "3.14"));
+		assert.ok(job.steps.some((step: any) => step.run?.includes("git archive --format=zip") && step.run.includes("LICENSE") && step.run.includes("manimgx-requirements.txt")));
+	});
+
+	it("the actual workflow digest gate accepts matching bytes and rejects altered installer bytes", () => {
+		const step = workflow.jobs.package.steps.find((item: any) => item.name === "Verify installer manifest against actual bytes");
+		assert.ok(step);
+		const code = step.run.split("<<'NODE'\n")[1].replace(/\nNODE\s*$/, "").replace(/^import .+;\n/gm, "");
+		const name = `Learning-Studio-${VERSION}-x64-setup.exe`;
+		const original = Buffer.from("original installer payload");
+		const digest = createHash("sha512").update(original).digest("base64");
+		const info = { version: VERSION, files: [{ url: name, size: original.length, sha512: digest }], path: name, sha512: digest };
+		const run = (installer: Buffer) => runInNewContext(code, {
+			fs: {
+				readFileSync: (file: string) => file === "package.json" ? JSON.stringify({ version: VERSION }) : file === "dist/latest.yml" ? releaseYaml.dump(info) : installer,
+				statSync: () => ({ size: 100 }),
+			}, crypto: { createHash }, yaml: releaseYaml,
+		});
+		assert.doesNotThrow(() => run(original));
+		assert.throws(() => run(Buffer.from("tampered installer payload")), /metadata does not match/);
+	});
 
 	it("can see drafts after ALL packaging jobs, only on real tag pushes", () => {
 		assert.ok(verify);
@@ -331,7 +309,7 @@ describe("release gate — workflow wiring", () => {
 	});
 
 	it("exposes the elevated token only to the two API-reading steps", () => {
-		const readers = ["List every release, drafts included", "Download the three update feeds"];
+		const readers = ["List every release, drafts included", "Download the Windows update feed"];
 		for (const step of verify.steps) {
 			if (readers.includes(step.name)) assert.equal(step.env?.GH_TOKEN, "${{ github.token }}");
 			else assert.equal(step.env?.GH_TOKEN, undefined, String(step.name ?? step.uses));
@@ -363,15 +341,16 @@ describe("release gate — workflow wiring", () => {
 		}
 	});
 
-	it("download step fetches exactly the three update feeds from the selected draft", () => {
-		const download = verify.steps.find((step: any) => step.name === "Download the three update feeds");
+	it("download step fetches exactly the Windows update feed from the selected draft", () => {
+		const download = verify.steps.find((step: any) => step.name === "Download the Windows update feed");
 		assert.ok(download);
-		for (const feed of ["latest-mac.yml", "latest.yml", "latest-linux.yml"]) assert.ok(download.run.includes(feed));
+		assert.ok(download.run.includes("latest.yml"));
+		assert.ok(!download.run.includes("latest-mac.yml"));
 		assert.match(download.run, /releases\/assets\/\$id/);
 	});
 });
 
-describe("release gate — CLI (offline, repo config)", () => {
+describe("release gate , CLI (offline, repo config)", () => {
 	// CLI fixtures follow the real package version; pure-core fixtures above
 	// intentionally stay at 0.2.0. A release version bump must not break tests.
 	const VERSION = (JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as { version: string }).version;
@@ -386,8 +365,8 @@ describe("release gate — CLI (offline, repo config)", () => {
 	function workspace(tagForm: "v" | "bare" = "v", version = VERSION) {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "lh-release-gate-"));
 		const release = healthyRelease(version, tagForm);
-		fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(upstreamPackage(version)));
-		fs.writeFileSync(path.join(root, "electron-builder.yml"), releaseYaml.dump(upstreamConfig()));
+		fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(studioPackage(version)));
+		fs.writeFileSync(path.join(root, "electron-builder.yml"), releaseYaml.dump(studioConfig()));
 		fs.writeFileSync(path.join(root, "releases.json"), JSON.stringify([release]));
 		fs.mkdirSync(path.join(root, "metadata"));
 		for (const [name, content] of Object.entries(healthyFeeds(version, release))) {
@@ -419,7 +398,7 @@ describe("release gate — CLI (offline, repo config)", () => {
 		try {
 			const result = run(["verify", path.join(root, "releases.json"), path.join(root, "metadata"), "--tag", TAG]);
 			assert.equal(result.status, 0, String(result.stderr));
-			assert.match(result.stdout, /11\/11 expected files present/);
+			assert.match(result.stdout, /4\/4 expected files present/);
 			assert.ok(result.stdout.includes(`OK: draft for ${TAG} is complete`));
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
@@ -430,12 +409,12 @@ describe("release gate — CLI (offline, repo config)", () => {
 		const { root } = workspace();
 		try {
 			const release = healthyRelease(VERSION);
-			release.assets = release.assets.filter((entry) => entry.name !== `LearnHarness-${VERSION}-arm64.dmg.blockmap`);
-			release.assets.push(asset(9999, "LearnHarness-0.1.0-x64-setup.exe"));
+			release.assets = release.assets.filter((entry) => entry.name !== `Learning-Studio-${VERSION}-x64-setup.exe.blockmap`);
+			release.assets.push(asset(9999, "Learning-Studio-0.1.0-x64-setup.exe"));
 			fs.writeFileSync(path.join(root, "releases.json"), JSON.stringify([release]));
 			const result = run(["verify", path.join(root, "releases.json"), path.join(root, "metadata"), "--tag", TAG]);
 			assert.equal(result.status, 1);
-			assert.match(result.stderr, /arm64\.dmg\.blockmap: missing from the release/);
+			assert.match(result.stderr, /x64-setup\.exe\.blockmap: missing from the release/);
 			assert.match(result.stderr, /0\.1\.0-x64-setup\.exe: unexpected asset/);
 			assert.match(result.stderr, /do not publish/);
 		} finally {
@@ -459,9 +438,9 @@ describe("release gate — CLI (offline, repo config)", () => {
 		const futureVersion = "12.3.4";
 		const { root } = workspace("v", futureVersion);
 		try {
-			const pkg = upstreamPackage(futureVersion);
+			const pkg = studioPackage(futureVersion);
 			fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ ...pkg, version: futureVersion }));
-			fs.writeFileSync(path.join(root, "electron-builder.yml"), releaseYaml.dump(upstreamConfig()));
+			fs.writeFileSync(path.join(root, "electron-builder.yml"), releaseYaml.dump(studioConfig()));
 			const result = run(["verify", path.join(root, "releases.json"), path.join(root, "metadata"), "--tag", `v${futureVersion}`], root);
 			assert.equal(result.status, 0, String(result.stderr));
 			assert.ok(result.stdout.includes(`OK: draft for v${futureVersion} is complete`));

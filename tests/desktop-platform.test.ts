@@ -99,7 +99,7 @@ describe("desktop window chrome", () => {
 		runInNewContext(readFileSync(new URL("../electron/preload.cjs", import.meta.url), "utf8"), context);
 		assert.equal(bridge.platform, "win32");
 		assert.deepEqual(Object.keys(bridge).sort(), [
-			"chatgpt", "checkForUpdates", "expandWindow", "getPathForFile", "getUpdateState", "getZoom", "installUpdate", "onOpenSettings", "onUpdateStatus", "onZoom", "platform", "subscriptions",
+			"chatgpt", "checkForUpdates", "downloadUpdate", "expandWindow", "getPathForFile", "getUpdateState", "getZoom", "installUpdate", "onOpenSettings", "onUpdateStatus", "onZoom", "platform", "subscriptions",
 		]);
 		assert.deepEqual(Object.keys(bridge.subscriptions as object).sort(), ["cancel", "consent", "disconnect", "login", "onChange", "open", "respond", "retry", "status"]);
 	});
@@ -111,6 +111,8 @@ describe("update preload bridge", () => {
 			onOpenSettings: (cb: (section: string) => void) => () => void;
 			getUpdateState: () => Promise<unknown>;
 			checkForUpdates: () => Promise<void>;
+			downloadUpdate: () => Promise<void>;
+			installUpdate: () => Promise<void>;
 		};
 		const handlers = new Map<string, (event: unknown, value: string) => void>();
 		const invoked: string[] = [];
@@ -134,8 +136,8 @@ describe("update preload bridge", () => {
 		assert.deepEqual(next, ["general"]);
 		off(); send(); assert.equal(next.length, 2, "old cleanup cannot remove a newer subscriber");
 		offNext();
-		await bridge.getUpdateState(); await bridge.checkForUpdates();
-		assert.deepEqual(invoked, ["lh:update:get", "lh:update:check"]);
+		await bridge.getUpdateState(); await bridge.checkForUpdates(); await bridge.downloadUpdate(); await bridge.installUpdate();
+		assert.deepEqual(invoked, ["lh:update:get", "lh:update:check", "lh:update:download", "lh:update-install"]);
 	});
 });
 
@@ -159,7 +161,8 @@ describe("desktop packaging policy", () => {
 			{ target: "AppImage", arch: ["x64"] }, { target: "deb", arch: ["x64"] },
 		]);
 		assert.equal(config.linux.syncDesktopName, true);
-		assert.equal(config.publish, null);
+		assert.deepEqual(config.publish, [{ provider: "github", owner: "dhanusharavinda", repo: "PROJECT_LEARNING_STUDIO", releaseType: "draft", channel: "latest" }]);
+		assert.equal(config.win.artifactName, "Learning-Studio-${version}-${arch}-setup.${ext}");
 		assert.equal(config.appId, "com.synapse.learningstudio");
 		assert.equal(config.productName, "Learning Studio");
 	});
@@ -168,7 +171,7 @@ describe("desktop packaging policy", () => {
 		const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 		assert.equal(pkg.author.name, "Amos Blomqvist");
 		assert.equal(pkg.author.email, "255718537+amosblomqvist@users.noreply.github.com");
-		assert.equal(pkg.homepage, "https://github.com/amosblomqvist/learnharness");
+		assert.equal(pkg.homepage, "https://github.com/dhanusharavinda/PROJECT_LEARNING_STUDIO");
 		assert.equal(pkg.desktopName, "learnharness.desktop");
 	});
 });
@@ -183,7 +186,7 @@ describe("workflow action versions", () => {
 			const workflow = yaml.load(readFileSync(new URL(`../.github/workflows/${filename}`, import.meta.url), "utf8"));
 			const expected = ["actions/checkout@v7", "actions/setup-node@v7"];
 			if (filename === "release.yml") {
-				expected.push("actions/github-script@v9", "actions/upload-artifact@v7", "maxim-lobanov/setup-xcode@v1");
+				expected.push("actions/github-script@v9", "actions/upload-artifact@v7", "actions/setup-python@v6");
 			}
 			const observed = new Set<string>();
 			for (const job of Object.values(workflow.jobs)) {
@@ -208,7 +211,7 @@ describe("workflow action versions", () => {
 describe("desktop release workflow", () => {
 	type Step = {
 		if?: string; run?: string; uses?: string; env?: Record<string, string>;
-		with?: { script?: string; "xcode-version"?: string };
+		with?: { script?: string; "python-version"?: string; architecture?: string };
 	};
 	type Workflow = {
 		concurrency: { group: string; "cancel-in-progress": boolean };
@@ -274,18 +277,18 @@ describe("desktop release workflow", () => {
 		}
 	});
 
-	it("pairs Icon Composer packaging with macOS 26 and Xcode selection, retaining macOS 15 CI", () => {
-		const mac = packaging.strategy?.matrix.include.find(entry => entry.platform === "mac-arm64");
-		assert.equal(mac?.os, "macos-26", "actool's .icon compiler needs macOS 26 host frameworks, not just newer Xcode");
-		assert.equal(mac?.builder_args, "--mac --arm64");
-		assert.equal(packaging["runs-on"], "${{ matrix.os }}");
-		const xcodeIndex = packaging.steps.findIndex(step => step.uses === "maxim-lobanov/setup-xcode@v1");
-		assert.ok(xcodeIndex >= 0);
-		const xcode = packaging.steps[xcodeIndex];
-		assert.equal(xcode?.if, "runner.os == 'macOS'");
-		assert.equal(xcode?.with?.["xcode-version"], "latest-stable");
+	it("prepares the portable runtime before Windows-only packaging and keeps other platform CI", () => {
+		assert.equal(packaging["runs-on"], "windows-2025");
+		assert.equal(packaging.strategy, undefined);
+		const pythonIndex = packaging.steps.findIndex(step => step.uses === "actions/setup-python@v6");
+		assert.ok(pythonIndex >= 0);
+		assert.equal(packaging.steps[pythonIndex]?.with?.["python-version"], "3.14");
+		assert.equal(packaging.steps[pythonIndex]?.with?.architecture, "x64");
+		const runtimeIndex = packaging.steps.findIndex(step => step.run?.includes("setup-manimgx.ps1"));
+		assert.ok(runtimeIndex > pythonIndex);
 		const buildIndex = packaging.steps.findIndex(step => step.run?.includes("electron-builder"));
-		assert.ok(buildIndex > xcodeIndex, "select Xcode before packaging compiles the icon");
+		assert.ok(buildIndex > runtimeIndex, "prepare the bundled runtime before packaging");
+		assert.ok(packaging.steps.some(step => step.run?.includes("Learning Studio.exe")));
 
 		const ci = yaml.load(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
 		const ciMac = ci.jobs.standalone?.strategy?.matrix.include.find(entry => entry.platform === "mac-arm64");

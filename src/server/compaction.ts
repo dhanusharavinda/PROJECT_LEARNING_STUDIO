@@ -48,6 +48,7 @@ import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
 import type { PiEngine } from "../agent/models.ts";
 import { runSubagent } from "../agent/subagents/pi-run.ts";
+import { beginDesktopWork, DesktopUpdatePendingError } from "./update-admission.ts";
 
 /** The summarizer's system prompt — server-owned operational framing,
  *  not model-facing doctrine (buildCompactionPrompt carries the shape). */
@@ -223,6 +224,9 @@ async function compact(deps: CompactionDeps, chatId: string): Promise<void> {
 		kind: deps.kind,
 	});
 
+	let finishDesktopWork: () => void;
+	try { finishDesktopWork = beginDesktopWork("compaction"); }
+	catch (error) { if (error instanceof DesktopUpdatePendingError) return; throw error; }
 	emit("compaction-changed", { chatId, running: true });
 	try {
 		const summarize = deps.summarize ?? subagentSummarizer;
@@ -267,6 +271,7 @@ async function compact(deps: CompactionDeps, chatId: string): Promise<void> {
 		// extraction trigger).
 		console.error(`[chat ${chatId}] compaction failed:`, err);
 	} finally {
+		finishDesktopWork();
 		emit("compaction-changed", { chatId, running: false });
 	}
 }

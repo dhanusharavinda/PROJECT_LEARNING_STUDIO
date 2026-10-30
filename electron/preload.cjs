@@ -22,7 +22,8 @@
  *   {status, version, revision} on updater events; installUpdate asks main
  *   to kill the server and quit-and-install. getUpdateState retrieves the
  *   snapshot for a late subscriber; checkForUpdates requests a manual
- *   check (including download/install-on-quit, even with automatic checks OFF).
+ *   check, downloadUpdate starts an available download, and installUpdate
+ *   requests a guarded restart. Automatic checks never download or install.
  *
  *   window.lh.onOpenSettings(cb) — menu navigation, buffered until React
  *   subscribes after a window is reopened. Browser builds have no bridge.
@@ -88,9 +89,10 @@ contextBridge.exposeInMainWorld("lh", {
 		ipcRenderer.on("lh:update-status", listener);
 		return () => ipcRenderer.removeListener("lh:update-status", listener);
 	},
-	installUpdate: () => ipcRenderer.send("lh:update-install"),
+	installUpdate: () => ipcRenderer.invoke("lh:update-install"),
 	getUpdateState: () => ipcRenderer.invoke("lh:update:get"),
 	checkForUpdates: () => ipcRenderer.invoke("lh:update:check"),
+	downloadUpdate: () => ipcRenderer.invoke("lh:update:download"),
 	onOpenSettings: (cb) => {
 		openSettingsListener = cb;
 		if (pendingOpenSettings !== null) {

@@ -1,8 +1,12 @@
-## Learning Studio, local Windows build
+## Learning Studio
 
-This project combines LearnHarness teaching with a local ManimGX animated blackboard. Synapse remains a separate notebook.
+This project combines LearnHarness teaching, a local ManimGX animated blackboard and an Experimental Lab. Synapse remains a separate notebook.
 
-Run `dist/Learning Studio-0.4.0-studio.4-x64-setup.exe` to install the Windows application. Visual teaching includes interactive experiments, code-driven 2D and 3D ManimGX animations, and reviewed diagrams directly in chat. Choose a format under **Generate visual**, and pause motion using **Animations** in the header. You can play the sample board without an API key. Add your own provider key inside the app, or choose an installed Ollama model and turn on **Offline learning** in Providers.
+Download the Windows installer from [Learning Studio releases](https://github.com/dhanusharavinda/PROJECT_LEARNING_STUDIO/releases). Future versions appear in **Settings → General → Check for updates**, with separate download and restart actions. Your local learning data stays outside the installation folder.
+
+Open **Experimental Lab** for original algorithms, AI engineering, electronics and system-design paths. Read, explain your plan, run Python exercises locally, practice interviews and review your reasoning with the same AI provider used by your lessons. Progress distinguishes reading, practice and checked exercises. The Lab also works without an API key, with coaching available when a model is connected.
+
+Visual teaching includes interactive experiments, code-driven 2D and 3D ManimGX animations, and reviewed diagrams directly in chat. Choose a format under **Generate visual**, and pause motion using **Animations** in the header. Add your own provider key inside the app, or choose an installed Ollama model and turn on **Offline learning** in Providers.
 
 See [the Learning Studio guide](docs/learning-studio.md) for setup, animation limits, lesson export, build instructions, and attribution. The original LearnHarness documentation follows.
 

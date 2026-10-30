@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import type { ChatDeleteMode } from "@/src/core";
-import { DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { DumbbellIcon, FlaskConicalIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
 import { LhMark } from "@/components/lh-mark";
@@ -76,16 +76,18 @@ declare global {
 			/** Observational update events and a snapshot for late subscribers. */
 			onUpdateStatus?: (cb: (status: UpdateState) => void) => () => void;
 			getUpdateState?: () => Promise<UpdateState>;
-			/** Explicit manual check also downloads and stages available updates. */
+			/** Checking, downloading and installation are separate user actions. */
 			checkForUpdates?: () => Promise<void>;
-			installUpdate?: () => void;
+			downloadUpdate?: () => Promise<void>;
+			installUpdate?: () => Promise<void>;
 			onOpenSettings?: (cb: (section: string) => void) => () => void;
 		};
 	}
 }
 
-const SidebarContext = createContext<{ open: boolean; toggle: () => void }>({
+const SidebarContext = createContext<{ open: boolean; overlay: boolean; toggle: () => void }>({
 	open: false,
+	overlay: false,
 	toggle: () => {},
 });
 
@@ -94,6 +96,17 @@ export function useSidebar() {
 }
 
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
+	const pathname = usePathname();
+	const isLab = pathname?.startsWith("/lab") ?? false;
+	const [labCompact, setLabCompact] = useState(false);
+	const [labMenuOpen, setLabMenuOpen] = useState(false);
+	useEffect(() => {
+		const resize = () => setLabCompact(isLab && window.innerWidth < SIDEBAR_AUTOCLOSE);
+		resize();
+		window.addEventListener("resize", resize);
+		return () => window.removeEventListener("resize", resize);
+	}, [isLab]);
+	useEffect(() => { setLabMenuOpen(false); }, [pathname]);
 	useEffect(() => {
 		const bridge = window.lh?.chatgpt;
 		if (!bridge) return;
@@ -148,6 +161,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, []);
 
 	const toggle = useCallback(() => {
+		// The compact Lab uses a temporary drawer, without changing the desktop preference.
+		if (labCompact) { setLabMenuOpen(value => !value); return; }
 		// Opening while narrow (auto-closed, or the user's own closed-at-
 		// narrow): ask the shell to widen to the threshold — the resize
 		// listener flips `narrow` and the sidebar appears. The preference
@@ -163,7 +178,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
 			return !v;
 		});
-	}, [narrow, open]);
+	}, [narrow, open, labCompact]);
 
 	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
 	// and the context answers on exactly that name — the shared spelling
@@ -179,7 +194,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, [toggle]);
 
 	return (
-		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
+		<SidebarContext.Provider value={{ open: labCompact ? labMenuOpen : open && !narrow, overlay: labCompact && labMenuOpen, toggle }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
 			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 		</SidebarContext.Provider>
@@ -390,7 +405,7 @@ export type SessionKindFilter = "teach" | "all" | "practice";
 const KIND_FILTER_KEY = "lh:session-kind-filter";
 
 function SessionsSidebar() {
-	const { open, toggle } = useSidebar();
+	const { open, overlay, toggle } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
@@ -647,7 +662,7 @@ function SessionsSidebar() {
 
 	return (
 		<aside
-			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "w-72" : "w-0")}
+			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "w-72" : "w-0", overlay && "fixed inset-y-0 left-0 z-50")}
 			aria-hidden={!open}
 		>
 			<div className="flex h-full w-72 flex-col border-r bg-background">
@@ -718,6 +733,10 @@ function SessionsSidebar() {
 						Practice
 						<span className="sr-only">create a new practice session</span>
 					</button>
+					<Link href="/lab" data-testid="open-lab" aria-current={pathname.startsWith("/lab") ? "page" : undefined} className={cn("flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground", pathname.startsWith("/lab") && "bg-accent text-foreground")}>
+						<FlaskConicalIcon className="size-3" />
+						Experimental Lab
+					</Link>
 				</div>
 
 				<div className="mx-3 mb-2 flex items-center gap-2">
@@ -945,8 +964,10 @@ function SessionsSidebar() {
 
 /** The app frame: sidebar inline + content. Rendered once in the root layout. */
 export function AppShell({ children }: { children: React.ReactNode }) {
+	const { overlay, toggle } = useSidebar();
 	return (
 		<SettingsDialogProvider>
+			{overlay && <button type="button" aria-label="Close navigation drawer" onClick={toggle} className="fixed inset-0 z-40 bg-black/40" />}
 			<SessionsSidebar />
 			<FilePathDropZone className="relative min-w-0 flex-1">{children}</FilePathDropZone>
 			{/* The single document-level keydown listener (keyboard wave A) —

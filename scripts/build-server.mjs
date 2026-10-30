@@ -69,7 +69,7 @@ for (const secret of ["auth.json", ...subscriptionSecrets, ".env", ".env.local"]
 // generic dist/** earlier broke pi-ai / pi-agent-core's runtime dist/.
 // Never touch ROOT/dist or ROOT/node_modules/electron (the running app
 // and the build runtime); native canvas/resvg packages stay untouched.
-for (const extra of ["dist", "work", ".runtime", path.join("node_modules", "electron")]) {
+for (const extra of ["dist", "work", ".runtime", "tests", path.join("node_modules", "electron")]) {
 	const target = path.join(STANDALONE, extra);
 	if (exists(target)) {
 		fs.rmSync(target, { recursive: true, force: true });
@@ -83,6 +83,10 @@ for (const asset of [
 	path.join("src", "agent", "system-prompt.md"),
 	path.join("src", "agent", "prompts", "teacher", "20-teaching.md"),
 	path.join("src", "server", "manim-scene-worker.py"),
+	path.join("public", "lab", "python-sandbox.html"),
+	path.join("public", "lab", "python-worker.mjs"),
+	path.join("public", "lab", "python", "pyodide.asm.wasm"),
+	path.join("public", "lab", "python", "python_stdlib.zip"),
 ]) {
 	if (!exists(path.join(STANDALONE, asset))) {
 		console.error(`[build-server] prompt asset missing from the trace: ${asset}`);

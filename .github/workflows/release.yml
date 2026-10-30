@@ -3,14 +3,12 @@ name: Desktop release
 on:
   push:
     tags: ["v*"]
-  # Manual runs are artifact-only, unsigned, and NEVER create a release.
-  # Use this for the first Windows/Linux dress rehearsal without secrets.
+  # Manual rehearsals create workflow artifacts only.
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Serialize separate runs for the same ref; never cancel an upload in flight.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -22,23 +20,24 @@ jobs:
   quality:
     name: Release gates
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
           cache: npm
       - run: npm ci
-      - name: Tag must match package.json
+      - name: Tag must match a stable package version
         if: github.event_name == 'push'
         run: |
           node --input-type=module -e '
             import fs from "node:fs";
             const {version} = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            if (process.env.GITHUB_REF_NAME !== `v${version}`) {
-              console.error("Release tag must equal v" + version);
-              process.exit(1);
+            if (!/^\d+\.\d+\.\d+$/.test(version) || process.env.GITHUB_REF_NAME !== `v${version}`) {
+              throw new Error("Release tag must equal v followed by the stable package.json version");
             }
           '
       - run: npm run typecheck
@@ -53,8 +52,6 @@ jobs:
     permissions:
       contents: write
     steps:
-      # This job succeeds without creating anything on manual rehearsals.
-      # Preparing once avoids the publisher's list-miss/create race between OS jobs.
       - name: Create or reuse the tag's draft
         if: github.event_name == 'push'
         uses: actions/github-script@v9
@@ -68,13 +65,9 @@ jobs:
             });
             const matches = releases.filter(release =>
               release.tag_name === tag || release.tag_name === version);
-            if (matches.length > 1) {
-              throw new Error(`Multiple releases match ${tag}; resolve them before uploading.`);
-            }
+            if (matches.length > 1) throw new Error(`Multiple releases match ${tag}; resolve them before uploading.`);
             if (matches.length === 1) {
-              if (!matches[0].draft) {
-                throw new Error(`${tag} is already published; refusing to modify it.`);
-              }
+              if (!matches[0].draft) throw new Error(`${tag} is already published; refusing to modify it.`);
               core.info(`Reusing draft ${matches[0].id} for ${tag}`);
               return;
             }
@@ -84,160 +77,124 @@ jobs:
             core.info(`Created draft ${data.id} for ${tag}`);
 
   package:
-    name: Package (${{ matrix.platform }})
+    name: Package Windows x64
     needs: [quality, draft]
+    runs-on: windows-2025
+    timeout-minutes: 60
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-26
-            platform: mac-arm64
-            builder_args: --mac --arm64
-          - os: windows-2025
-            platform: windows-x64
-            builder_args: --win --x64
-          - os: ubuntu-24.04
-            platform: linux-x64
-            builder_args: --linux --x64
-    runs-on: ${{ matrix.os }}
-    # Apple's notarization queue has taken ~2 hours for this team.
-    timeout-minutes: 180
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
           cache: npm
-      # The mac icon is the Icon Composer document (build/icon.icon);
-      # compiling it needs both macOS 26+ and actool ≥ 26 (Xcode 26+).
-      # Xcode 26's asset compiler crashes on macOS 15's older frameworks.
-      # Select the latest stable Xcode; no-op for Windows/Linux.
-      - name: Select Xcode 26+ for actool (mac icon compile)
-        if: runner.os == 'macOS'
-        uses: maxim-lobanov/setup-xcode@v1
+      - uses: actions/setup-python@v6
         with:
-          xcode-version: latest-stable
+          python-version: "3.14"
+          architecture: x64
       - run: npm ci
+      - name: Prepare portable ManimGX runtime
+        shell: pwsh
+        run: ./scripts/setup-manimgx.ps1 -BuildPython (Get-Command python).Source
       - name: Native renderer tests on this OS
         run: npx electron --import tsx --test tests/pdf-native-render.test.ts tests/pdf-ops.test.ts tests/svg-native-render.test.ts tests/browser-service.test.ts
         env:
           NODE_ENV: test
           ELECTRON_RUN_AS_NODE: "1"
       - run: npm run build
-      # Check the fresh trace before any static copying/curation.
       - run: node scripts/smoke-provider-runtime.mjs
       - run: node scripts/build-server.mjs
       - run: node scripts/smoke-server.mjs --electron
-      - name: Validate macOS release secrets
-        if: github.event_name == 'push' && runner.os == 'macOS'
-        env:
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Build unsigned Windows installer and update metadata
+        run: npx electron-builder --win --x64 --publish never
+      - name: Initialize packaged providers offline
         run: |
-          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Missing signing/notarization secret: $name"
-              exit 1
-            fi
-          done
-      - name: Signed and notarized macOS release → draft
-        if: github.event_name == 'push' && runner.os == 'macOS'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder ${{ matrix.builder_args }} --publish always -c.forceCodeSigning=true
-      - name: Windows/Linux release → draft
-        if: github.event_name == 'push' && runner.os != 'macOS'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder ${{ matrix.builder_args }} --publish always
-      - name: Unsigned macOS rehearsal (no publish, no notarization)
-        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder ${{ matrix.builder_args }} --publish never -c.mac.notarize=false
-      - name: Windows/Linux rehearsal (no publish)
-        if: github.event_name == 'workflow_dispatch' && runner.os != 'macOS'
-        run: npx electron-builder ${{ matrix.builder_args }} --publish never
-      - name: Initialize packaged providers offline (host and packaged Electron Node)
+          node scripts/smoke-provider-runtime.mjs --standalone dist/win-unpacked/resources/server/standalone
+          node scripts/smoke-provider-runtime.mjs --standalone dist/win-unpacked/resources/server/standalone --runtime "dist/win-unpacked/Learning Studio.exe"
+      - name: Exercise packaged demo runtime
+        run: node scripts/smoke-demo-runtime.mjs --standalone dist/win-unpacked/resources/server/standalone --runtime "dist/win-unpacked/Learning Studio.exe" --browser
+      - name: Verify packaged ManimGX import and attribution
+        shell: pwsh
         run: |
-          case "$RUNNER_OS" in
-            macOS)
-              app="dist/mac-arm64/LearnHarness.app/Contents"
-              payload="$app/Resources/server/standalone"
-              runtime="$app/MacOS/LearnHarness"
-              ;;
-            Windows)
-              payload="dist/win-unpacked/resources/server/standalone"
-              runtime="dist/win-unpacked/LearnHarness.exe"
-              ;;
-            Linux)
-              payload="dist/linux-unpacked/resources/server/standalone"
-              runtime="dist/linux-unpacked/learnharness"
-              ;;
-          esac
-          node scripts/smoke-provider-runtime.mjs --standalone "$payload"
-          node scripts/smoke-provider-runtime.mjs --standalone "$payload" --runtime "$runtime"
-      - name: Exercise packaged demo runtime (own Electron, no system Chrome)
+          & './dist/win-unpacked/resources/manimgx-runtime/python.exe' -I -c "import manimgx; print('Packaged ManimGX ready')"
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged ManimGX import failed' }
+          foreach ($required in @('licenses/LearnHarness-AGPL-3.0.txt', 'licenses/pi-compaction.md')) {
+            if (!(Test-Path -LiteralPath (Join-Path 'dist/win-unpacked/resources' $required))) { throw "Missing attribution: $required" }
+          }
+      - name: Archive the exact source revision with licenses
+        shell: pwsh
         run: |
-          case "$RUNNER_OS" in
-            macOS)
-              app="dist/mac-arm64/LearnHarness.app/Contents"
-              node scripts/smoke-demo-runtime.mjs --standalone "$app/Resources/server/standalone" --runtime "$app/MacOS/LearnHarness" --browser
-              ;;
-            Windows)
-              node scripts/smoke-demo-runtime.mjs --standalone dist/win-unpacked/resources/server/standalone --runtime dist/win-unpacked/LearnHarness.exe --browser
-              ;;
-            Linux)
-              xvfb-run -a node scripts/smoke-demo-runtime.mjs --standalone dist/linux-unpacked/resources/server/standalone --runtime dist/linux-unpacked/learnharness --browser
-              ;;
-          esac
-      - name: Save installers and update metadata
+          $version = (Get-Content -Raw -LiteralPath package.json | ConvertFrom-Json).version
+          $archive = "dist/Learning-Studio-$version-source.zip"
+          git archive --format=zip --output=$archive HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Source archive failed' }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead((Join-Path $PWD $archive))
+          try {
+            foreach ($required in @('LICENSE', 'docs/learning-studio.md', 'docs/compaction-accounting.md', 'runtime/manimgx-requirements.txt', 'scripts/setup-manimgx.ps1')) {
+              if ($null -eq $zip.GetEntry($required)) { throw "Missing source attribution or runtime recipe: $required" }
+            }
+            if ($zip.Entries.FullName -match '^(data|work|\.runtime|node_modules|dist)/|(^|/)(\.env[^/]*|auth\.json|[^/]*credentials[^/]*)$') { throw 'Private or generated files entered the source archive' }
+          } finally { $zip.Dispose() }
+      - name: Verify installer manifest against actual bytes
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          import yaml from 'js-yaml';
+          const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const info = yaml.load(fs.readFileSync('dist/latest.yml', 'utf8'));
+          const name = `Learning-Studio-${version}-x64-setup.exe`;
+          const bytes = fs.readFileSync(`dist/${name}`);
+          const digest = crypto.createHash('sha512').update(bytes).digest('base64');
+          if (info.version !== version || info.files?.length !== 1 || info.files[0].url !== name ||
+              info.files[0].size !== bytes.length || info.files[0].sha512 !== digest || info.path !== name || info.sha512 !== digest) {
+            throw new Error('Installer metadata does not match the built payload');
+          }
+          for (const file of [`${name}.blockmap`, `Learning-Studio-${version}-source.zip`]) {
+            if (fs.statSync(`dist/${file}`).size <= 0) throw new Error(`Empty artifact: ${file}`);
+          }
+          NODE
+      - name: Upload verified assets to the draft
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          # The draft job refuses published releases; check again immediately before upload.
+          test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber \
+            "dist/Learning-Studio-$version-x64-setup.exe" \
+            "dist/Learning-Studio-$version-x64-setup.exe.blockmap" \
+            dist/latest.yml "dist/Learning-Studio-$version-source.zip"
+      - name: Save installers, source and update metadata
         uses: actions/upload-artifact@v7
         with:
-          name: learnharness-${{ matrix.platform }}
+          name: learning-studio-windows-x64
           retention-days: 7
           if-no-files-found: error
           path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.exe
-            dist/*.AppImage
-            dist/*.deb
-            dist/*.blockmap
-            dist/latest*.yml
+            dist/Learning-Studio-*-x64-setup.exe
+            dist/Learning-Studio-*-x64-setup.exe.blockmap
+            dist/Learning-Studio-*-source.zip
+            dist/latest.yml
 
-  # The last gate before a human publishes: after ALL three packaging jobs
-  # have uploaded, fail the run unless the tag's single draft release holds
-  # exactly the 11 verified assets (4 installers + mac updater ZIP + their
-  # blockmaps + 3 latest*.yml feeds) and the feeds reference those uploads
-  # by exact name at the package.json version. Read-only: it never creates,
-  # edits, publishes, or deletes anything. Manual rehearsals upload nothing,
-  # so there is no draft to verify and the job stays skipped.
   verify:
     name: Verify draft release
     needs: package
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # GitHub hides drafts from tokens without push access. The commands below
-    # remain GET-only; expose this token only to the two API-reading steps.
+    # Drafts need write-scoped visibility, but this job only uses GET requests.
     permissions:
       contents: write
     steps:
-      # The tagged revision — verify exactly what was packaged, not a moving default.
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
@@ -250,28 +207,22 @@ jobs:
       - name: List every release, drafts included
         env:
           GH_TOKEN: ${{ github.token }}
-        # --slurp wraps the paginated pages into one JSON document
-        # ([[release,...],[release,...]]); the validator flattens it.
         run: gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
       - name: Select the tag's single draft
-        # Machine JSON on stdout (release id + asset ids); warnings on stderr.
         run: npx tsx scripts/verify-release.ts select "$RUNNER_TEMP/releases.json" --tag "$GITHUB_REF_NAME" > "$RUNNER_TEMP/draft.json"
-      - name: Download the three update feeds
+      - name: Download the Windows update feed
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/metadata"
-          for name in latest-mac.yml latest.yml latest-linux.yml; do
-            id=$(DRAFT="$RUNNER_TEMP/draft.json" NAME="$name" node -e '
-              const fs = require("node:fs");
-              const draft = JSON.parse(fs.readFileSync(process.env.DRAFT, "utf8"));
-              const asset = draft.assets.find((entry) => entry.name === process.env.NAME);
-              if (asset == null) { console.error("draft has no " + process.env.NAME); process.exit(1); }
-              console.log(asset.id);
-            ')
-            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$id" -H "Accept: application/octet-stream" > "$RUNNER_TEMP/metadata/$name"
-            echo "downloaded $name ($(wc -c < "$RUNNER_TEMP/metadata/$name") bytes)"
-          done
-      - name: Verify draft assets and update feeds
+          id=$(DRAFT="$RUNNER_TEMP/draft.json" node -e '
+            const fs = require("node:fs");
+            const draft = JSON.parse(fs.readFileSync(process.env.DRAFT, "utf8"));
+            const asset = draft.assets.find(entry => entry.name === "latest.yml");
+            if (asset == null) throw new Error("draft has no latest.yml");
+            console.log(asset.id);
+          ')
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$id" -H "Accept: application/octet-stream" > "$RUNNER_TEMP/metadata/latest.yml"
+      - name: Verify draft assets and update feed
         run: npx tsx scripts/verify-release.ts verify "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/metadata" --tag "$GITHUB_REF_NAME"

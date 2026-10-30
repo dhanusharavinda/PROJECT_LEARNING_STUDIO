@@ -4,7 +4,17 @@ Learning Studio is a separate Windows desktop application. LearnHarness remains 
 
 ## First use
 
-Run `dist/Learning Studio-0.4.0-studio.4-x64-setup.exe` from this project to install the application. The installer lets you choose a location and includes its own Python renderer. A separate system Python installation is not required.
+Download the installer from [Learning Studio releases](https://github.com/dhanusharavinda/PROJECT_LEARNING_STUDIO/releases), or build `dist/Learning-Studio-0.5.0-x64-setup.exe` from this project. The installer lets you choose a location and includes its own Python renderer. A separate system Python installation is not required.
+
+## Experimental Lab
+
+The Lab adds original study paths in algorithms, AI engineering, electronics and system design. Its catalog supports filtering, bookmarks, references and saved attempts. An exercise opens in a compact workspace with the material, your working area and an optional coach. The stages are Understand, Plan, Attempt, Test and Reflect. Your explanation and reflection are saved alongside code, answers, hints and test history. Saved material, reading, practice and verified exercise checks remain distinct.
+
+Python exercises run in a disposable browser worker using the bundled Pyodide interpreter. They do not run on the host Python interpreter. The sandbox has an opaque origin, blocked network access and no app credentials or persistent filesystem. Runtime assets load locally, with a 15-second loading limit and 30-second execution limit. Cancel terminates the worker. Standard-library exercises work offline; installing arbitrary network packages is not supported. Results are checked against the catalog on the server and tied to the exact saved code revision. This is a local learning tool, not a tamper-proof examination system.
+
+The coach uses the existing model selection and offline setting. It can ask questions, give staged hints and review reasoning. Structured reviews retain strengths, improvements and estimated usage. AI feedback does not become evidence that code passed tests. Interview mode adds a timer and question-by-question answers. Teach and Practice handoffs carry the exercise and your current work into the existing lesson system, where interactive visuals and the knowledge graph remain available.
+
+The study material and implementation are original to this project. INDEX 0 was a product-workflow reference. Its proprietary curriculum, prompts, source code and branding are not included. External resources link to their publishers, who retain their own licenses.
 
 ### Offline learning
 
@@ -85,7 +95,7 @@ Use **Save lesson as Markdown** in the lesson's top bar. It exports readable tea
 
 Teaching and other model calls use the providers selected in settings. The visual director, code author and independent reviewer make additional model calls and repairs can add more. Rich authoring uses the lesson's strong model; image review uses a configured image-capable model. Each call is attributed to its actual model in the usage estimate, including mixed providers. ManimGX rendering itself runs locally without a per-render service fee. There is no automatic cloud voice generation. Usage displays are estimates, not a hard billing limit. Use provider account controls for spending limits. A local endpoint remains available, but models labeled `cloud` are remote even when accessed through Ollama.
 
-The standalone installer includes the renderer and portable Python. It does not require a machine-wide Python installation. The application has a distinct Windows identity and user-data folder. Upstream LearnHarness automatic updates are disabled for this fork, preventing replacement with a build that lacks the blackboard integration. No public release feed has been configured for Learning Studio.
+The standalone installer includes the renderer and portable Python. It does not require a machine-wide Python installation. The application has a distinct Windows identity and user-data folder. Updates come only from `dhanusharavinda/PROJECT_LEARNING_STUDIO`, not upstream LearnHarness. Settings → General offers Check, Download and Restart/install. An optional automatic check discovers versions but does not silently install on ordinary quit. Restart is refused while teaching, background rendering, extraction, compaction or Lab work is active. Installers are currently unsigned. See [the release procedure](desktop-release.md) for verification and publication.
 
 ## Development and validation
 
@@ -100,3 +110,5 @@ Use isolated synthetic test directories. Never use a personal notebook for autom
 ## Attribution and licenses
 
 This application extends [LearnHarness](https://github.com/amosblomqvist/learnharness), licensed AGPL-3.0-only. The original author and license remain in the repository. [ManimGX](https://github.com/academa-labs/manimgx) supplies the animation engine. Its own code is MIT; its native wheels are GPL-3.0-or-later as a whole. The portable runtime retains bundled license notices. This is a local build, not a proprietary license exception or a published official LearnHarness release.
+
+The Lab bundles [Pyodide](https://github.com/pyodide/pyodide) under MPL-2.0 and its Python runtime under the Python license. Its editor uses CodeMirror under MIT. License notices and source locations are listed in [Lab runtime licenses](lab-runtime-licenses.md).

@@ -84,6 +84,10 @@ files:
   # Main-process ID-token signature verification (no bundled OAuth implementation).
   - node_modules/jose/**/*
 extraResources:
+  - from: docs/licenses
+    to: licenses/lab
+  - from: docs/lab-runtime-licenses.md
+    to: licenses/lab/README.md
   - from: .runtime/manimgx-portable
     to: manimgx-runtime
     filter:
@@ -164,7 +168,7 @@ win:
     - target: nsis
       arch:
         - x64
-  artifactName: "${productName}-${version}-${arch}-setup.${ext}"
+  artifactName: "Learning-Studio-${version}-${arch}-setup.${ext}"
   # Unsigned Windows release (owner ruling): preserve icon/version metadata,
   # skip signing, and do not require a publisher signature for updates.
   signExecutable: false
@@ -188,4 +192,9 @@ linux:
   syncDesktopName: true
   # Both targets update via electron-updater 6.8.9. AppImage replaces its
   # own file; deb uses dpkg/apt and may request administrator permission.
-publish: null
+publish:
+  - provider: github
+    owner: dhanusharavinda
+    repo: PROJECT_LEARNING_STUDIO
+    releaseType: draft
+    channel: latest

@@ -95,3 +95,4 @@ export type { LessonAnimationRequest } from "./lesson-animation.ts";
 export { visualLearningEnabled, validVisualFormat } from "./visual-learning.ts";
 export type { VisualFormat } from "./visual-learning.ts";
 export type { ManimSceneArtifact } from "./manim-scene.ts";
+export * from "./lab.ts";

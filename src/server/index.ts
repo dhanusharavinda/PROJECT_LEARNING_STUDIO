@@ -55,3 +55,5 @@ export { renderBlackboard, blackboardAvailability, blackboardMediaResponse } fro
 export { ollamaGet, ollamaPost } from "./ollama.ts";
 export { visualLearningGet, visualLearningPost } from "./visual-learning.ts";
 export { renderManimScene, validateManimSource, manimSceneStoryboard } from "./manim-scene.ts";
+export { desktopUpdateReadinessResponse } from "./update-admission.ts";
+export { labOverviewGet, labSessionsGet, labSessionGet, labSessionCreate, labSessionPatch, labSessionDelete, labLibraryPost, labRunPost, labRunStart, labRunCancel, labHandoffPost, labCoachPost, labCoachCancel, hasActiveLabWork } from "./lab.ts";

@@ -11,6 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 import { UpdateSettings, updateStatusText, MANUAL_UPDATE_HINT, AUTO_UPDATE_HINT, type UpdateState } from "../components/settings/update-settings.tsx";
 import UpdateBanner from "../components/update-banner.tsx";
+import { registerUpdateGuard } from "../components/update-readiness.ts";
 import { SettingsDialogBody, SettingsDialogProvider } from "../components/settings/settings-dialog.tsx";
 import nextConfig from "../next.config.ts";
 
@@ -31,20 +32,23 @@ function deferred<T>() {
 
 function bridge(initial = state(), snapshot = Promise.resolve(initial)) {
 	const listeners = new Set<(value: UpdateState) => void>();
-	const calls = { check: 0, install: 0, get: 0 };
+	const calls = { check: 0, download: 0, install: 0, get: 0 };
 	let onOpen: ((section: string) => void) | null = null;
 	let checkFailure: Error | null = null;
+	let installFailure: Error | null = null;
 	window.lh = {
 		expandWindow() {},
 		getUpdateState: () => { calls.get++; return snapshot; },
 		onUpdateStatus: cb => { listeners.add(cb); return () => { listeners.delete(cb); }; },
 		checkForUpdates: async () => { calls.check++; if (checkFailure) throw checkFailure; },
-		installUpdate: () => { calls.install++; },
+		downloadUpdate: async () => { calls.download++; },
+		installUpdate: async () => { calls.install++; if (installFailure) throw installFailure; },
 		onOpenSettings: cb => { onOpen = cb; return () => { onOpen = null; }; },
 	};
 	return {
 		calls, listeners,
 		failCheck: () => { checkFailure = new Error("sensitive raw diagnostics"); },
+		failInstall: () => { installFailure = new Error("sensitive raw diagnostics"); },
 		push: async (value: UpdateState) => { await act(async () => { for (const listener of listeners) listener(value); }); },
 		open: async () => { await act(async () => onOpen?.("general")); },
 	};
@@ -71,10 +75,11 @@ afterEach(async () => {
 });
 
 describe("version and contextual copy", () => {
-	it("local fork exposes its version without linking to a nonexistent upstream release", () => {
+	it("stable fork exposes its own version and release notes without changing upstream authorship", () => {
 		const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-		assert.deepEqual(nextConfig.env, { LH_VERSION: pkg.version, LH_HOMEPAGE: "" });
-		assert.equal(pkg.homepage, "https://github.com/amosblomqvist/learnharness", "upstream attribution remains in package metadata");
+		assert.deepEqual(nextConfig.env, { LH_VERSION: pkg.version, LH_HOMEPAGE: pkg.version.includes("-studio.") ? "" : pkg.homepage });
+		assert.equal(pkg.homepage, "https://github.com/dhanusharavinda/PROJECT_LEARNING_STUDIO");
+		assert.equal(pkg.author.name, "Amos Blomqvist");
 	});
 
 	it("never claims live/latest information and keeps updater errors generic", () => {
@@ -84,14 +89,28 @@ describe("version and contextual copy", () => {
 		assert.equal(updateStatusText(state({ status: "checking" })), "Checking for updates…");
 		assert.equal(updateStatusText(state({ status: "downloading", version: "0.3.8" })), "Downloading version 0.3.8…");
 		assert.equal(updateStatusText(state({ status: "up-to-date" })), "No newer version was found at the last check.");
-		assert.equal(updateStatusText(state({ status: "downloaded", version: "0.3.8" })), "Version 0.3.8 is ready. It will install when you quit the app.");
+		assert.equal(updateStatusText(state({ status: "downloaded", version: "0.3.8" })), "Version 0.3.8 is ready. Choose Restart and install when you are ready.");
 		assert.equal(updateStatusText(state({ status: "error" })), "Couldn’t check for updates. Try again later.");
 		assert.equal(updateStatusText(state({ status: "downloading" })), "Downloading an update…");
-		assert.equal(updateStatusText(state({ status: "downloaded" })), "An update is ready. It will install when you quit the app.");
+		assert.equal(updateStatusText(state({ status: "downloaded" })), "An update is ready. Choose Restart and install when you are ready.");
 	});
 });
 
 describe("General update rows", () => {
+	it("Settings and banner both refuse installation when an unsaved draft cannot flush", async () => {
+		const b = bridge(state({ status: "downloaded", version: "0.5.1" }));
+		const host = await mount(<><UpdateSettings {...props} /><UpdateBanner /></>);
+		const remove = registerUpdateGuard(async () => { throw new Error("private save diagnostic"); });
+		try {
+			await click(q(host, "update-restart"));
+			assert.equal(b.calls.install, 0);
+			await click(host.querySelector<HTMLElement>("[data-testid='update-banner'] button"));
+			assert.equal(b.calls.install, 0);
+			assert.ok(host.textContent!.includes("Save your work"));
+			assert.ok(!host.textContent!.includes("private"));
+			assert.equal(document.body.inert, false);
+		} finally { remove(); }
+	});
 	it("browser/SSR shows version and installed-version release notes, without inactive controls or claims", () => {
 		const html = renderToStaticMarkup(<UpdateSettings {...props} />);
 		assert.ok(html.includes("Version 0.3.7"));
@@ -123,6 +142,35 @@ describe("General update rows", () => {
 		await click(q(host, "update-check")); assert.equal(b.calls.check, 1);
 	});
 
+	it("an available version waits for a separate Download action and reports progress", async () => {
+		const b = bridge(); const host = await mount(<UpdateSettings {...props} />);
+		await click(q(host, "update-check"));
+		await b.push(state({ status: "available", version: "0.5.1", revision: 1 }));
+		assert.equal(b.calls.download, 0); assert.equal(b.calls.install, 0);
+		assert.ok(q(host, "update-status")!.textContent!.includes("0.5.1 is available"));
+		await click(q(host, "update-download")); assert.equal(b.calls.download, 1);
+		await b.push(state({ status: "downloading", version: "0.5.1", progress: 42, revision: 2 }));
+		assert.ok(q(host, "update-status")!.textContent!.includes("42%"));
+		assert.equal(q(host, "update-download"), null); assert.equal(b.calls.install, 0);
+	});
+
+	it("busy restart feedback preserves the ready update and offers another explicit attempt", async () => {
+		const b = bridge(state({ status: "downloaded", version: "0.5.1", actionError: "busy", revision: 2 }));
+		const host = await mount(<><UpdateSettings {...props} /><UpdateBanner /></>);
+		assert.ok(q(host, "update-status")!.textContent!.includes("active lessons and renders"));
+		assert.ok(q(host, "update-banner")!.textContent!.includes("active lessons and renders"));
+		assert.equal(b.calls.install, 0);
+		await click(q(host, "update-restart")); assert.equal(b.calls.install, 1);
+	});
+
+	it("restart IPC rejection is visible without discarding the staged update", async () => {
+		const b = bridge(state({ status: "downloaded", version: "0.5.1" })); b.failInstall();
+		const host = await mount(<UpdateSettings {...props} />);
+		await click(q(host, "update-restart"));
+		assert.equal(q(host, "update-status")!.textContent, "Couldn’t prepare a restart. Save your work and try again.");
+		assert.ok(q(host, "update-restart")); assert.ok(!host.textContent!.includes("sensitive"));
+	});
+
 	it("checking/downloading shows context and disables only the UI button; ready offers Restart", async () => {
 		const b = bridge(); const host = await mount(<UpdateSettings {...props} />);
 		await b.push(state({ status: "checking", revision: 1 }));
@@ -133,7 +181,7 @@ describe("General update rows", () => {
 		assert.equal(q(host, "update-status")!.textContent, "Downloading version 0.3.8…");
 		assert.equal((q(host, "update-check") as HTMLButtonElement).disabled, true);
 		await b.push(state({ status: "downloaded", version: "0.3.8", revision: 3 }));
-		assert.equal(q(host, "update-check"), null); assert.ok(q(host, "update-status")!.textContent!.includes("quit the app"));
+		assert.equal(q(host, "update-check"), null); assert.ok(q(host, "update-status")!.textContent!.includes("Restart and install"));
 		await click(q(host, "update-restart")); assert.equal(b.calls.install, 1);
 	});
 

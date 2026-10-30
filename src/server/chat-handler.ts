@@ -68,6 +68,7 @@ import { trustedOllamaRequest } from "./ollama.ts";
 import { isLessonAnimationRequest } from "../core/lesson-animation.ts";
 import { visualLearningEnabled, validVisualFormat, visualFormatEnabled, visualFormatDisabledMessage } from "../core/visual-learning.ts";
 import { validateManimSource, renderManimScene, manimSceneStoryboard } from "./manim-scene.ts";
+import { beginDesktopWork, DesktopUpdatePendingError } from "./update-admission.ts";
 
 /**
  * One chat turn over the server-owned native record. Framework-free (plain
@@ -98,7 +99,7 @@ function settlementErrorText(error: unknown): string {
 	return error instanceof TurnPersistenceError ? error.message : "An error occurred.";
 }
 
-const jobRunner = createJobRunner({
+const rawJobRunner = createJobRunner({
 	renderBlackboard,
 	manimSceneRuntime:{validateSource:validateManimSource,renderScene:renderManimScene,storyboard:manimSceneStoryboard},
 	visualAnimationsEnabled:()=>visualLearningEnabled(stores.settingsStore.readSettings()),
@@ -142,7 +143,7 @@ const jobRunner = createJobRunner({
 /** The app's ONE extraction pipeline instance — both front doors share it:
  *  quiz-triggered session runs (turn-service) and notes imports
  *  (/api/graph/import) hit the same single-flight registry. */
-export const extraction = createExtractionPipeline({
+const extractionPipeline = createExtractionPipeline({
 	...stores,
 	// BYOK (owner, 2026-09-22): the extraction stages resolve the chain —
 	// role override → slot → NOTHING — read FRESH per stage call; an empty
@@ -156,6 +157,33 @@ export const extraction = createExtractionPipeline({
 	providerKeyMissing: (provider, tier) =>
 		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
 });
+
+const jobRunner: typeof rawJobRunner = {
+	async runJob(...args) {
+		let finish: () => void;
+		try { finish = beginDesktopWork("background-job"); }
+		catch (error) {
+			if (!(error instanceof DesktopUpdatePendingError)) throw error;
+			stores.jobStore.updateJob(args[0], { status: "error", error: error.message, activity: "Update restart pending" });
+			return;
+		}
+		try { await rawJobRunner.runJob(...args); }
+		finally { finish(); }
+	},
+};
+
+export const extraction: typeof extractionPipeline = {
+	async runExtraction(chatId) {
+		const finish = beginDesktopWork("extraction");
+		try { return await extractionPipeline.runExtraction(chatId); }
+		finally { finish(); }
+	},
+	async importNotes(input) {
+		const finish = beginDesktopWork("notes-import");
+		try { return await extractionPipeline.importNotes(input); }
+		finally { finish(); }
+	},
+};
 
 
 // Wake-pipeline wiring (contracts.ts "THE ASYNC PROTOCOL" §4): the pipeline
@@ -386,7 +414,14 @@ export async function handleChatInput(
 	// One turn per chat, ever. A second request while a turn runs means a
 	// stale/remounted client raced a live one — letting it through would
 	// double-run the teacher and clobber the first turn's persist.
+	let finishDesktopTurn: () => void;
+	try { finishDesktopTurn = beginDesktopWork("lesson"); }
+	catch (error) {
+		if (!(error instanceof DesktopUpdatePendingError)) throw error;
+		return Response.json({ error: error.message }, { status: 409 });
+	}
 	if (!beginTurn(chatId)) {
+		finishDesktopTurn();
 		console.info(`[chat ${chatId}] turn already in flight — request rejected`);
 		return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
 	}
@@ -410,6 +445,7 @@ export async function handleChatInput(
 	} catch (err) {
 		console.error(`[chat ${chatId}] write-ahead persist failed:`, err);
 		endTurn(chatId);
+		finishDesktopTurn();
 		return new Response("Your input could not be saved. Please try again.", { status: 500 });
 	}
 	// Visibility bookkeeping is not the canonical save. Its failure must
@@ -604,6 +640,7 @@ export async function handleChatInput(
 				// after this turn has already failed and left the registry.
 				rememberTurnFailure(chatId, reportedErrorText ?? settlementErrorText(error));
 				endTurn(chatId);
+				finishDesktopTurn();
 				unregisterTurn(chatId);
 				unregisterLiveAgent(chatId);
 				// The canonical save may have succeeded before later bookkeeping
@@ -662,6 +699,7 @@ export async function handleChatInput(
 				// LAST: a poller that sees not-in-flight must read an already-persisted
 				// record — endTurn only after persistTurn has done its job.
 				endTurn(chatId);
+				finishDesktopTurn();
 				// And only then does the turn stop being a running object
 				// (background-turn wave, 2026-09-25): a reattach that finds
 				// nothing must find the persisted record current — the same
@@ -733,6 +771,7 @@ export async function handleChatInput(
 		// The stream never started, so no onFinish will fire — clear the registry
 		// or a malformed request would lock the chat until the TTL eviction.
 		endTurn(chatId);
+		finishDesktopTurn();
 		// Wave C: the live-agent registration (if it happened) dies with the
 		// turn here too - nothing was handed (the loop never ticked).
 		unregisterLiveAgent(chatId);

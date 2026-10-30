@@ -38,12 +38,15 @@ const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
+const { TEST_IDENTITY, isUpdateTestBuild, resolveUpdateTestProfile, prepareUpdateTestCache } = require("./update-test-mode.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
 const SIDEBAR_AUTOCLOSE = 928;
 
-const PRODUCT_NAME = "Learning Studio";
+const PACKAGE_METADATA = require("../package.json");
+const IS_UPDATE_TEST_BUILD = isUpdateTestBuild(PACKAGE_METADATA);
+const PRODUCT_NAME = IS_UPDATE_TEST_BUILD ? TEST_IDENTITY.productName : "Learning Studio";
 
 // APP NAME → userData (owner, 2026-10-10): the Application Support dir is
 // exactly "LearnHarness" in dev AND packaged. Packaged Electron would
@@ -52,6 +55,10 @@ const PRODUCT_NAME = "Learning Studio";
 // Must run before the LH_DEV_URL suffix below — dev becomes
 // "LearnHarness-dev".
 app.setName(PRODUCT_NAME);
+const UPDATE_TEST_PROFILE = process.env.LH_UPGRADE_TEST_PROFILE || process.env.LH_UPGRADE_TEST_MODE
+	? resolveUpdateTestProfile(process.env, app.getPath("userData")) : null;
+if (PACKAGE_METADATA.upgradeCheckOnly === true && !UPDATE_TEST_PROFILE) throw new Error("This update-check package requires its marked check-only profile.");
+if (UPDATE_TEST_PROFILE) app.setPath("userData", UPDATE_TEST_PROFILE.profile);
 const AUTH_FILE = () => path.join(app.getPath("userData"), "auth.json");
 const DATA_DIR = () => path.join(app.getPath("userData"), "data");
 
@@ -146,6 +153,7 @@ let subscriptions = null;
 let subscriptionChild = null;
 // Per-launch request capability, never OAuth tokens and never renderer state.
 let desktopAPISecret = null;
+let updateServerOrigin = null;
 let reopenWindow = null;
 const trustedAppWindows = new Set();
 
@@ -221,6 +229,7 @@ function startServer(port) {
 					PORT: String(port),
 					HOSTNAME: "127.0.0.1", // the server defaults to 0.0.0.0 — never
 					LH_DATA_DIR: DATA_DIR(),
+					...(UPDATE_TEST_PROFILE || IS_UPDATE_TEST_BUILD ? { LH_IGNORE_ENV_KEYS: "1" } : {}),
 					LH_MANIMGX_PYTHON: process.env.LH_MANIMGX_PYTHON || path.join(process.resourcesPath, 'manimgx-runtime', 'python.exe'),
 					// The auth/keys store — the child reads AND writes this file itself
 					// (no env injection anymore: a spawn-time copy would shadow every
@@ -269,7 +278,16 @@ function waitUntilUp(url, tries = 150) {
 	});
 }
 
-function killServer() {
+function killServer(options = {}) {
+	// During an update, failure to stop the owned tree must preserve the
+	// server and its connections rather than hand a locked payload to NSIS.
+	if (options.strict && process.platform === "win32" && serverProcess) {
+		terminateWindowsTree(serverProcess);
+		serverProcess = null;
+		chatgpt?.close();
+		subscriptions?.close();
+		return;
+	}
 	chatgpt?.close();
 	subscriptions?.close();
 	if (!serverProcess) return;
@@ -301,7 +319,7 @@ function createWindow(url) {
 	const win = new BrowserWindow({
 		width: 1440,
 		height: 900,
-		title: PRODUCT_NAME,
+		title: UPDATE_TEST_PROFILE ? `${PRODUCT_NAME} (isolated update check)` : PRODUCT_NAME,
 		// Merged chrome (owner, 2026-09-17): the system title bar is gone;
 		// the app's own 60px header bands ARE the title bar. The traffic
 		// lights float over the sidebar's LH wordmark band, vertically
@@ -421,44 +439,27 @@ function createWindow(url) {
  * lights, is impossible without rebuilding the window). */
 const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 
-/* ── Auto-update (Wave C, owner 2026-10-10: silent download + restart ─────
- * banner; checks at startup + every 24h) ─────────────────────────────────
- *
- * Feed: GitHub Releases (electron-builder.yml publish → app-update.yml,
- * baked + signed into the bundle). macOS needs the app signed (it is —
- * Developer ID) and updates ride the zip target (Squirrel.Mac); blockmaps
- * give differential downloads for free. Windows uses NSIS; Linux uses
- * AppImage or DebUpdater (6.8.9 supports deb; installation can request
- * administrator permission via the package manager — owner 2026-10-11).
- *
- * Hard rules:
- *  - DEV NEVER UPDATES: !app.isPackaged skips the updater entirely — the
- *    dev world runs `next dev` and has no signed bundle.
- *  - THE UPDATER CAN NEVER TAKE THE APP DOWN: every event and check is
- *    caught and logged (feed down, disk full, bad signature — all just
- *    log lines; the app keeps working, update or no update).
- *  - LH_UPDATE_FEED (env): overrides the baked GitHub feed with a generic
- *    local server — the pre-release verification drill (serve
- *    latest-mac.yml + zip + blockmap from any localhost HTTP dir and
- *    watch a real installed copy find/download/restart). Test-only seam.
- *
- * Install path: the downloaded update applies on quit (autoInstallOnAppQuit
- * — Squirrel.Mac stages natively and swaps on relaunch). The renderer
- * banner asks for an immediate restart via "lh:update-install"; we kill
- * the child server FIRST — deterministic ordering: the server lives
- * inside the .app bundle Squirrel is about to replace (extraResources),
- * and before-quit alone would race the swap. */
+/* Updates use only this fork's GitHub release feed. Checking never downloads,
+ * and downloading never installs. Only the user's explicit restart action
+ * may install, after the owned server has stopped admitting new work.
+ * Development shells cannot update. A loopback-only feed override supports
+ * the packaged upgrade drill without modifying the production destination. */
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let autoUpdater = null; // electron-updater's, packaged builds only
-// Observational only: this snapshot NEVER gates a check, download or install.
-// The revision lets late subscribers reject an older in-flight IPC snapshot.
-let updateState = { status: "idle", version: null, revision: 0 };
+const UPDATE_REPOSITORY = { provider: "github", owner: "dhanusharavinda", repo: "PROJECT_LEARNING_STUDIO", channel: "latest" };
+// Actual updater events establish download/install eligibility. The renderer
+// receives only a revisioned snapshot and cannot supply a version or URL.
+let availableUpdateVersion = null;
+let downloadedUpdateVersion = null;
+let downloadInFlight = false;
+let installInFlight = false;
+let updateState = { status: "idle", version: null, revision: 0, progress: null, actionError: null };
 
-function reportUpdateStatus(status, version = null) {
+function reportUpdateStatus(status, version = null, details = {}) {
 	try {
 		// A later check/error must not hide an update already staged for quit.
-		if (updateState.status === "downloaded" && status !== "downloaded") return;
-		updateState = { status, version: typeof version === "string" ? version : null, revision: updateState.revision + 1 };
+		if (downloadedUpdateVersion && status !== "downloaded") return;
+		updateState = { status, version: typeof version === "string" ? version : null, revision: updateState.revision + 1, progress: null, actionError: null, ...details };
 		for (const win of BrowserWindow.getAllWindows()) {
 			try {
 				win.webContents.send("lh:update-status", updateState);
@@ -485,6 +486,7 @@ function automaticUpdatesEnabled() {
 
 function checkForUpdates({ manual = false } = {}) {
 	if (!autoUpdater) return;
+	if (downloadInFlight || installInFlight) return;
 	if (!manual && !automaticUpdatesEnabled()) {
 		log("auto-update: automatic check skipped (turned off in Settings)");
 		return;
@@ -504,25 +506,70 @@ function checkForUpdates({ manual = false } = {}) {
 		});
 }
 
-function installUpdateNow() {
-	// Kill the server BEFORE the quit-and-install (see block comment).
+async function downloadUpdate() {
+	if (!autoUpdater || !availableUpdateVersion || downloadedUpdateVersion || downloadInFlight || installInFlight) return;
+	downloadInFlight = true;
+	reportUpdateStatus("downloading", availableUpdateVersion, { progress: 0 });
 	try {
-		killServer();
-	} catch {
-		/* already dead */
+		await autoUpdater.downloadUpdate();
+	} catch (error) {
+		log(`update download failed: ${error?.message ?? error}`);
+		reportUpdateStatus("available", availableUpdateVersion, { actionError: "download" });
+	} finally {
+		downloadInFlight = false;
 	}
-	autoUpdater?.quitAndInstall();
+}
+
+async function updateReadiness(op) {
+	if (!updateServerOrigin || !desktopAPISecret) throw new Error("Owned server unavailable");
+	const response = await fetch(`${updateServerOrigin}/api/desktop/update-readiness`, {
+		method: "POST", redirect: "error", signal: AbortSignal.timeout(5000),
+		headers: { "content-type": "application/json", "x-learnharness-desktop": desktopAPISecret },
+		body: JSON.stringify({ op }),
+	});
+	if (!response.ok) throw new Error("Update readiness unavailable");
+	return response.json();
+}
+
+async function installUpdateNow() {
+	if (!autoUpdater || !downloadedUpdateVersion || installInFlight) return;
+	if (UPDATE_TEST_PROFILE) {
+		reportUpdateStatus("downloaded", downloadedUpdateVersion, { actionError: "test-profile" });
+		return;
+	}
+	installInFlight = true;
+	let prepared = false;
+	let handedOff = false;
+	try {
+		// The owned server checks all teaching and rendering work, then blocks
+		// new work atomically until installation or an explicit release.
+		const readiness = await updateReadiness("prepare");
+		if (readiness?.ready !== true) {
+			reportUpdateStatus("downloaded", downloadedUpdateVersion, { actionError: readiness?.reason === "busy" ? "busy" : "readiness" });
+			return;
+		}
+		prepared = true;
+		reportUpdateStatus("downloaded", downloadedUpdateVersion);
+		killServer({ strict: true });
+		autoUpdater.quitAndInstall(false, true);
+		handedOff = true;
+	} catch (error) {
+		log(`update installation failed: ${error?.message ?? error}`);
+		reportUpdateStatus("downloaded", downloadedUpdateVersion, { actionError: "readiness" });
+		if (prepared) await updateReadiness("release").catch(() => {});
+	} finally {
+		if (!handedOff) installInFlight = false;
+	}
 }
 
 function setupAutoUpdater() {
-	// A fork must never replace itself with the upstream application.
-	if (!process.env.LH_UPDATE_FEED) {
-		log('auto-update: no Learning Studio feed configured');
-		reportUpdateStatus('disabled');
+	if (!app.isPackaged || process.env.LH_DEV_URL) {
+		log("auto-update: dev build — updater disabled");
+		reportUpdateStatus("disabled");
 		return;
 	}
-	if (!app.isPackaged) {
-		log("auto-update: dev build — updater disabled");
+	if (IS_UPDATE_TEST_BUILD && !process.env.LH_UPDATE_FEED) {
+		log("auto-update: an isolated rehearsal build requires its loopback test feed");
 		reportUpdateStatus("disabled");
 		return;
 	}
@@ -533,13 +580,33 @@ function setupAutoUpdater() {
 		reportUpdateStatus("disabled");
 		return;
 	}
-	const feed = process.env.LH_UPDATE_FEED;
-	if (feed) {
-		autoUpdater.setFeedURL({ provider: "generic", url: feed });
-		log(`auto-update: LH_UPDATE_FEED override → ${feed}`);
+	// Pin this fork explicitly. The only override is a loopback release drill.
+	let feed = UPDATE_REPOSITORY;
+	if (process.env.LH_UPDATE_FEED) {
+		try {
+			const local = new URL(process.env.LH_UPDATE_FEED);
+			if (local.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(local.hostname) || local.username || local.password) throw new Error("Feed override must use loopback HTTP");
+			feed = { provider: "generic", url: local.href };
+		} catch (error) {
+			log(`auto-update: invalid test feed (${error.message})`);
+			autoUpdater = null;
+			reportUpdateStatus("disabled");
+			return;
+		}
 	}
-	autoUpdater.autoDownload = true;
-	autoUpdater.autoInstallOnAppQuit = true;
+	autoUpdater.setFeedURL(feed);
+	if (UPDATE_TEST_PROFILE) {
+		try { autoUpdater.updateConfigPath = prepareUpdateTestCache(UPDATE_TEST_PROFILE, path.join(process.resourcesPath, "app-update.yml")); }
+		catch (error) {
+			log(`auto-update: cannot isolate test cache (${error.message})`);
+			autoUpdater = null;
+			reportUpdateStatus("disabled");
+			return;
+		}
+	}
+	autoUpdater.allowPrerelease = false;
+	autoUpdater.autoDownload = false;
+	autoUpdater.autoInstallOnAppQuit = false;
 	// Route every updater log line through the shell's own log (userData/
 	// logs/main.log) — feed failures must be diagnosable after the fact.
 	autoUpdater.logger = {
@@ -549,9 +616,17 @@ function setupAutoUpdater() {
 		error: (m) => log(`updater error: ${m}`),
 	};
 	autoUpdater.on("checking-for-update", () => reportUpdateStatus("checking"));
-	autoUpdater.on("update-available", (info) => reportUpdateStatus("downloading", info?.version));
-	autoUpdater.on("update-not-available", () => reportUpdateStatus("up-to-date"));
+	autoUpdater.on("update-available", (info) => {
+		availableUpdateVersion = typeof info?.version === "string" ? info.version : null;
+		reportUpdateStatus("available", availableUpdateVersion);
+	});
+	autoUpdater.on("update-not-available", () => { availableUpdateVersion = null; reportUpdateStatus("up-to-date"); });
+	autoUpdater.on("download-progress", (info) => {
+		const percent = Number(info?.percent);
+		reportUpdateStatus("downloading", availableUpdateVersion, { progress: Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : null });
+	});
 	autoUpdater.on("update-downloaded", (info) => {
+		downloadedUpdateVersion = typeof info?.version === "string" ? info.version : null;
 		log(`update downloaded: ${info?.version} — banner shown`);
 		reportUpdateStatus("downloaded", info?.version);
 	});
@@ -668,6 +743,7 @@ async function main() {
 	// (guards, menu, single instance).
 	const devUrl = process.env.LH_DEV_URL;
 	const url = devUrl ?? `http://127.0.0.1:${await freePort()}`;
+	updateServerOrigin = devUrl ? null : new URL(url).origin;
 	if (!devUrl) {
 		desktopAPISecret = randomBytes(32).toString("hex");
 		const ownedOrigin = new URL(url).origin;
@@ -733,7 +809,14 @@ async function main() {
 	// interval fire after it below. setupAutoUpdater's contract: failures
 	// are log lines — this can never block boot.
 	setupAutoUpdater();
-	ipcMain.on("lh:update-install", () => installUpdateNow());
+	ipcMain.handle("lh:update-install", (event) => {
+		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) throw new Error("Untrusted desktop request.");
+		return installUpdateNow();
+	});
+	ipcMain.handle("lh:update:download", (event) => {
+		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) throw new Error("Untrusted desktop request.");
+		return downloadUpdate();
+	});
 	ipcMain.handle("lh:update:get", (event) => {
 		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) throw new Error("Untrusted desktop request.");
 		return updateState;
