@@ -82,6 +82,7 @@ for (const extra of ["dist", "work", ".runtime", path.join("node_modules", "elec
 for (const asset of [
 	path.join("src", "agent", "system-prompt.md"),
 	path.join("src", "agent", "prompts", "teacher", "20-teaching.md"),
+	path.join("src", "server", "manim-scene-worker.py"),
 ]) {
 	if (!exists(path.join(STANDALONE, asset))) {
 		console.error(`[build-server] prompt asset missing from the trace: ${asset}`);

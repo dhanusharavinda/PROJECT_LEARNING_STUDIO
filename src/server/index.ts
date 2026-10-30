@@ -53,3 +53,5 @@ export { customProviderGet, customProviderMutation } from "./custom-provider-htt
 
 export { renderBlackboard, blackboardAvailability, blackboardMediaResponse } from "./blackboard.ts";
 export { ollamaGet, ollamaPost } from "./ollama.ts";
+export { visualLearningGet, visualLearningPost } from "./visual-learning.ts";
+export { renderManimScene, validateManimSource, manimSceneStoryboard } from "./manim-scene.ts";

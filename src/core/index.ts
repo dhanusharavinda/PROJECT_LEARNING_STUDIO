@@ -92,3 +92,6 @@ export { lessonExport } from "./lesson-export.ts";
 export { OLLAMA_PROVIDER } from "./offline.ts";
 export { isLessonAnimationRequest } from "./lesson-animation.ts";
 export type { LessonAnimationRequest } from "./lesson-animation.ts";
+export { visualLearningEnabled, validVisualFormat } from "./visual-learning.ts";
+export type { VisualFormat } from "./visual-learning.ts";
+export type { ManimSceneArtifact } from "./manim-scene.ts";

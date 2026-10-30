@@ -66,6 +66,8 @@ import type {CallUsage} from "../core/contracts.ts";
 import { queueLessonAnimation, queueRequestedVisual } from "./lesson-animation.ts";
 import { trustedOllamaRequest } from "./ollama.ts";
 import { isLessonAnimationRequest } from "../core/lesson-animation.ts";
+import { visualLearningEnabled, validVisualFormat, visualFormatEnabled, visualFormatDisabledMessage } from "../core/visual-learning.ts";
+import { validateManimSource, renderManimScene, manimSceneStoryboard } from "./manim-scene.ts";
 
 /**
  * One chat turn over the server-owned native record. Framework-free (plain
@@ -98,11 +100,22 @@ function settlementErrorText(error: unknown): string {
 
 const jobRunner = createJobRunner({
 	renderBlackboard,
+	manimSceneRuntime:{validateSource:validateManimSource,renderScene:renderManimScene,storyboard:manimSceneStoryboard},
+	visualAnimationsEnabled:()=>visualLearningEnabled(stores.settingsStore.readSettings()),
+	visualFormatEnabled:format=>visualFormatEnabled(stores.settingsStore.readSettings(),format),
+	animationReviewEngineFor:(_chatId,automatic)=>{
+		const record=stores.settingsStore.readSettings();
+		const candidates=[resolveRoleSpec("visualMaker",record),effectiveSettings().models.vision,effectiveSettings().models.cheap];
+		for(const spec of candidates){
+			if (!spec || !providerKeyPresent(spec.provider) || (automatic&&!connectionBackgroundAllowed(spec.provider))) continue;
+			const engine=piEngineForSpec(spec,automatic);if(engine.model.input.includes("image"))return engine;
+		}
+	},
 	animationEngineFor: (chatId, automatic) => {
 		const saved = stores.settingsStore.readSettings();
 		const spec = resolveConversationSpec(stores.chatStore.getChat(chatId)?.settings, effectiveSettings().models.strong, Boolean(offlineSpec(saved)));
 		if (!spec) return;
-		if (automatic && !connectionBackgroundAllowed(spec.provider)) throw new Error("Automatic animation planning is paused for this provider. Click Generate animation to request it directly.");
+		if (automatic && !connectionBackgroundAllowed(spec.provider)) throw new Error("Automatic visual generation is paused for this provider. Click Generate visual to request it directly.");
 		return piEngineForSpec(spec, automatic);
 	},
 	chatStore: stores.chatStore,
@@ -175,10 +188,17 @@ export async function lessonAnimationPost(req: Request, chatId: string): Promise
 		if (raw.length > 2048) return Response.json({ error: "Animation request is too large." }, { status: 413 });
 		const body = JSON.parse(raw);
 		if (typeof body.sourceMessageId !== "string" || body.sourceMessageId.length > 200 || (body.retry !== undefined && typeof body.retry !== "boolean")) return Response.json({ error: "Choose a saved explanation to animate." }, { status: 400 });
-		if (effectiveSettings().agent.tools.animation === false) return Response.json({ error: "Turn on Animated board in Settings, Agent, then try again." }, { status: 409 });
+		if (body.mode!==undefined&&!validVisualFormat(body.mode)) return Response.json({error:"Choose Auto, Interactive demo, Animation, or Diagram."},{status:400});
+		const animationsEnabled=visualLearningEnabled(stores.settingsStore.readSettings());
+		const mode=body.mode??"auto";
+		if (!animationsEnabled&&(mode==="interactive"||mode==="video")) return Response.json({error:"Animations are off. Choose Diagram or turn animations on."},{status:409});
+		const settings = stores.settingsStore.readSettings();
+		if (mode !== "auto" && !visualFormatEnabled(settings, mode)) return Response.json({error:visualFormatDisabledMessage(mode)},{status:409});
+		const available = (["interactive","video","diagram"] as const).filter(format=>visualFormatEnabled(settings,format));
+		if (mode === "auto" && !available.length) return Response.json({error:"All visual formats are turned off. Enable a format in Settings, Agent."},{status:409});
 		if (!stores.chatStore.getChat(chatId)) return Response.json({ error: "Lesson not found." }, { status: 404 });
 		const previous = stores.jobStore.listJobs(chatId).find(j => isLessonAnimationRequest(j.input) && j.input.sourceMessageId === body.sourceMessageId && j.input.intentMessageId === body.sourceMessageId);
-		const job = queueLessonAnimation({ ...stores, spawn: id => void jobRunner.runJob(id) }, chatId, body.sourceMessageId, { retry: body.retry, automatic: false, ...(previous ? { intentMessageId: body.sourceMessageId } : {}) });
+		const job = queueLessonAnimation({ ...stores, spawn: id => void jobRunner.runJob(id) }, chatId, body.sourceMessageId, { format:mode === "auto" && available.length === 1 ? available[0] : mode,retry: body.retry, automatic: false, ...(previous ? { intentMessageId: body.sourceMessageId } : {}) });
 		return Response.json({ job }, { status: job.status === "running" ? 202 : 200, headers: { "cache-control": "no-store" } });
 	} catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Could not start the animation." }, { status: 400 }); }
 }
@@ -602,11 +622,13 @@ export async function handleChatInput(
 				// refolds this on the client after the turn settles. The
 				// provenance message is the turn's FIRST new assistant message.
 				const response = stamped.find((m) => (m as { role?: string }).role === "assistant");
-				if (!isAborted && !buildAgent && input.type !== "steers" && effective.agent.tools.animation !== false) {
+				if (!isAborted && !buildAgent && input.type !== "steers") {
 					try {
 						// Storage assigns canonical message ids. Use those ids for the inline anchor.
 						const saved = stores.chatStore.getChat(chatId)?.messages ?? [];
-						queueRequestedVisual({ ...stores, spawn: id => void jobRunner.runJob(id) }, chatId, new Set(saved.slice(merged.length).map(m => m.id)));
+						const visualSettings = stores.settingsStore.readSettings();
+						const available = (["interactive","video","diagram"] as const).filter(format=>visualFormatEnabled(visualSettings,format));
+						if (available.length) queueRequestedVisual({ ...stores, spawn: id => void jobRunner.runJob(id) }, chatId, new Set(saved.slice(merged.length).map(m => m.id)),available.length === 1 ? available[0] : "auto");
 					}
 					catch (error) { console.error(`[chat ${chatId}] animation dispatch failed:`, error); }
 				}

@@ -160,6 +160,16 @@ describe("activity dock pure layer", () => {
 		assert.equal(cached.context?.limit, 200_000);
 	});
 
+	it("a review call displays its actual model while author totals remain intact", () => {
+		const usage = { model: "author:pro", inputTokens: 5000, outputTokens: 500, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, steps: 2, lastStep: { ...step(200, 30), model: "review:vision" } };
+		const blob = toBlobs({ jobs: [job({ usage, contextLimit: 32000 })], extractions: [] })[0]!;
+		assert.equal(blob.model, "review:vision");
+		assert.deepEqual(blob.context, { used: 230, limit: 32000 });
+		assert.equal(usage.model, "author:pro");
+		const fallback = toBlobs({ jobs: [job({ usage: { ...usage, lastStep: step(200, 30) } })], extractions: [] })[0]!;
+		assert.equal(fallback.model, "author:pro");
+	});
+
 	it("extraction blobs carry no money/context (—, the doctrine)", () => {
 		const blob = toBlobs({
 			jobs: [],

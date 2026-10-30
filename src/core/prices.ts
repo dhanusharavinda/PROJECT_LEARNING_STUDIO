@@ -42,14 +42,18 @@ export function sumSteps(steps: readonly CallUsage[]): CallUsage {
 }
 
 export function turnCost(turn: Pick<TurnUsage, "model" | "steps">, price: CallPricer): number | null {
-	if (isSubscriptionModel(turn.model) || turn.steps.length === 0) return null;
+	if (turn.steps.length === 0) return null;
 	let total = 0;
+	let priced=false;
 	for (const step of turn.steps) {
-		const cost = price(step, turn.model);
+		const model=step.model??turn.model;
+		if(isSubscriptionModel(model)) continue;
+		const cost = price(step, model);
 		if (cost === null) return null;
+		priced=true;
 		total += cost;
 	}
-	return total;
+	return priced?total:null;
 }
 
 export function sessionCost(record: Pick<ChatRecord, "turns">, price: CallPricer): SessionPricing {
@@ -69,12 +73,12 @@ export function sessionCost(record: Pick<ChatRecord, "turns">, price: CallPricer
 
 export function jobCost(job: Pick<JobRecord, "usage">, price: CallPricer): number | null {
 	const usage = job.usage;
-	if (!usage || isSubscriptionModel(usage.model)) return null;
+	if (!usage) return null;
 	if (usage.calls && usage.calls.length === usage.steps) {
 		return turnCost({ model: usage.model, steps: usage.calls }, price);
 	}
 	// An old one-call job is fully reconstructible from its total. For a
 	// multi-call job, the server resolver decides whether aggregate pricing
 	// is safe for this model (tiered models need the lost per-call sizes).
-	return price(usage, usage.model);
+	return isSubscriptionModel(usage.model)?null:price(usage, usage.model);
 }

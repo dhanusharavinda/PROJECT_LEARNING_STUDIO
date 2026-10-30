@@ -20,6 +20,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { LiveToolCard } from "@/components/artifacts/live-tool-card";
 import { LessonAnimationAction } from "@/components/artifacts/lesson-animation";
+import { VisualLearningProvider, VisualLearningToggle } from "@/components/visual-learning-toggle";
 import { Separator } from "@/components/ui/separator";
 import { AnsweredCard } from "@/components/answered-card";
 import { artifactRenderers } from "@/components/artifacts";
@@ -1248,6 +1249,7 @@ export function Chat({
 	};
 
 	return (
+		<VisualLearningProvider>
 		<ChatActionsContext.Provider
 			value={{
 				chatId,
@@ -1350,6 +1352,7 @@ export function Chat({
 					{/* The plan chip (owner, plan-placement round): session-level
 					    structure beside the phase chip — access to the full-DAG popup
 					    at every width; the marginalia is the wide-screen glance view. */}
+					<VisualLearningToggle />
 					<Hint label="Save lesson as Markdown" side="bottom">
 						<a href={`/api/chats/${encodeURIComponent(chatId)}/export`} download aria-label="Save lesson as Markdown" className="lh-no-drag flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"><DownloadIcon className="size-4" aria-hidden /></a>
 					</Hint>
@@ -1616,7 +1619,7 @@ export function Chat({
 													}
 												}
 											})}
-											{!m.parts.some(p => p.type === "tool-animation") && <LessonAnimationAction chatId={chatId} sourceMessageId={m.parts.filter(p => p.type === "text" && (p.text?.trim().length ?? 0) >= 40).map(p => textPartMessageId(p.id)).filter((id): id is string => !!id).at(-1)} busy={localStream && mi === messages.length - 1} onQueued={() => fetchJobsRef.current()} />}
+											<LessonAnimationAction chatId={chatId} sourceMessageId={m.parts.filter(p => p.type === "text" && (p.text?.trim().length ?? 0) >= 40).map(p => textPartMessageId(p.id)).filter((id): id is string => !!id).at(-1)} busy={localStream && mi === messages.length - 1} onQueued={() => fetchJobsRef.current()} />
 										</MessageContent>
 									</Message>
 									)}
@@ -1802,6 +1805,7 @@ export function Chat({
 			}}
 		/>
 		</ChatActionsContext.Provider>
+		</VisualLearningProvider>
 	);
 }
 

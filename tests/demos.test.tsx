@@ -52,7 +52,7 @@ import { JobsContext } from "../components/jobs-context.ts";
 import { demoInputSchema, jobTools, pdfInputSchema, visualInputSchema } from "../src/agent/tools/jobs.ts";
 import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
 import { headlessOverride, type DemoRunResult, type HeadlessApi } from "../src/agent/subagents/headless.ts";
-import { createJobRunner, demoModelOverride, visualModelOverride } from "../src/agent/subagents/runner.ts";
+import { createJobRunner, demoModelOverride, demoReviewModelOverride, visualModelOverride } from "../src/agent/subagents/runner.ts";
 import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
 import { buildAbortSteer, buildSubagentSteer, isSubagentFailure, setSteerUiInverted, type SteerMessage } from "../src/core/contracts.ts";
 import type { JobRecord } from "../src/core/contracts.ts";
@@ -140,7 +140,9 @@ function scriptedModel(turns: Array<{ toolCalls?: Array<{ toolCallId: string; to
 
 // ─── fake headless ───────────────────────────────────────────────────────────
 
-const CLEAN_RUN: DemoRunResult = { consoleErrors: [], pageErrors: [], failedRequests: [], ok: true };
+// The runner tests exercise persistence and dispatch with a fake browser. Real
+// parameter intervention and false-report rejection are tested separately.
+const CLEAN_RUN: DemoRunResult = { consoleErrors: [], pageErrors: [], failedRequests: [], ok: true, probeResult:{quality:{ok:true,checks:Array.from({length:8},(_,i)=>({label:`Synthetic control ${i}`,passed:true}))}} };
 const BROKEN_RUN: DemoRunResult = {
 	consoleErrors: ["Uncaught ReferenceError: foo is not defined"],
 	pageErrors: [],
@@ -834,12 +836,14 @@ describe("demo/visual job runners", () => {
 			{ toolCalls: [{ toolCallId: "r1", toolName: "run_demo", input: {} }] },
 			{ text: "Sweep the rate slider." },
 		]);
+		demoReviewModelOverride.current = scriptedModel([{toolCalls:[{toolCallId:"review-d1",toolName:"submit_demo_review",input:{approved:true,issues:[]}}]}]);
 		const { steers, runner } = testRunner();
 		try {
 			await runner.runJob(job.id);
 		} finally {
 			headlessOverride.current = undefined;
 			demoModelOverride.current = undefined;
+			demoReviewModelOverride.current = undefined;
 		}
 
 		const done = jobStore.getJob(job.id)!;
@@ -847,7 +851,8 @@ describe("demo/visual job runners", () => {
 		assert.equal(done.activity, "finished", "the worker finishes independently of delivery");
 		const result = done.result as { title: string; html: string; tested: boolean; notes?: string };
 		assert.equal(result.title, "Compound interest");
-		assert.equal(result.html, GOOD_HTML);
+		assert.ok(result.html.endsWith(GOOD_HTML));
+		assert.match(result.html,/connect-src 'none'/,"new demos carry the tested offline document policy");
 		assert.equal(result.tested, true);
 
 		// The steer carries the artifact for the renderer.
@@ -933,6 +938,7 @@ describe("demo/visual job runners", () => {
 			{ toolCalls: [{ toolCallId: "r1", toolName: "run_demo", input: {} }] },
 			{ text: "Sweep it." },
 		]);
+		demoReviewModelOverride.current = scriptedModel([{toolCalls:[{toolCallId:"review-d2",toolName:"submit_demo_review",input:{approved:true,issues:[]}}]}]);
 		headlessOverride.current = fakeHeadless();
 		const { steers, runner } = testRunner();
 
@@ -989,6 +995,7 @@ describe("demo/visual job runners", () => {
 			assert.equal(jobStore.listJobs(chat.id).length, 1, "no duplicate job for the same tool part");
 		} finally {
 			demoModelOverride.current = undefined;
+			demoReviewModelOverride.current = undefined;
 			headlessOverride.current = undefined;
 		}
 	});

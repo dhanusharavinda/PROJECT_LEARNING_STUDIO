@@ -15,6 +15,7 @@ import { emit } from "../core/events.ts";
 import type { JobStore } from "../core/ports.ts";
 import type { CreateJobInit, JobPatch } from "../core/ports.ts";
 import type { JobRecord } from "../core/contracts.ts";
+import { isLessonAnimationRequest } from "../core/lesson-animation.ts";
 
 /** Background jobs (data/jobs). Not in config.ts PATHS (orchestrator-owned). */
 const JOBS_DIR = path.join(PATHS.data, "jobs");
@@ -61,6 +62,7 @@ function getJob(id: string): JobRecord | null {
 function updateJob(id: string, patch: JobPatch): JobRecord | null {
 	const record = getJob(id);
 	if (!record) return null;
+	if (patch.kind && patch.kind!==record.kind && (!isLessonAnimationRequest(record.input) || record.status!=="running" || !["demo","visual","animation"].includes(patch.kind))) throw new Error("Only a running contextual visual can resolve its output format.");
 	const next: JobRecord = { ...record, ...patch, updatedAt: patch.updatedAt ?? new Date().toISOString() };
 	fs.writeFileSync(jobFile(id), JSON.stringify(next, null, "\t"), "utf-8");
 	// EVERY write, not just status flips: progress-line updates must reach

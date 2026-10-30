@@ -81,7 +81,7 @@ export function activityFeed(): {
 					...job,
 					costUsd: jobCost(job),
 					title: chat.title ?? chat.id,
-					contextLimit: job.usage ? (limits.get(job.usage.model) ?? null) : null,
+					contextLimit: job.usage ? (limits.get(job.usage.lastStep?.model ?? job.usage.model) ?? null) : null,
 				});
 			}
 		}

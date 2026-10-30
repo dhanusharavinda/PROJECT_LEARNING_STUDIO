@@ -141,7 +141,7 @@ export interface CreateJobInit {
 }
 
 /** Mergeable fields — identity (id, kind, chatId, toolCallId, createdAt) is immutable. */
-export type JobPatch = Partial<Omit<JobRecord, "id" | "kind" | "chatId" | "toolCallId" | "createdAt">>;
+export type JobPatch = Partial<Omit<JobRecord, "id" | "chatId" | "toolCallId" | "createdAt">>;
 
 export interface JobStore {
 	/** Create a running job (keyed by toolCallId for spawn dedup). */

@@ -79,9 +79,11 @@ test("activityFeed: contextLimit is the server's live-catalog join (owner amendm
 		const known = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "tc_known" });
 		const unknown = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "tc_unknown" });
 		const bare = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "tc_bare" });
-		createdJobs.push(known.id, unknown.id, bare.id);
+		const reviewed = jobStore.createJob({ kind: "demo", chatId: chat.id, toolCallId: "tc_reviewed" });
+		createdJobs.push(known.id, unknown.id, bare.id, reviewed.id);
 		jobStore.updateJob(known.id, { usage: usageFor("openrouter:z-ai/glm-5.3-flash") });
 		jobStore.updateJob(unknown.id, { usage: usageFor("nope/unknown") });
+		jobStore.updateJob(reviewed.id, { usage: { ...usageFor("unconfigured:author"), steps: 2, lastStep: { model: "openrouter:z-ai/glm-5.3-flash", inputTokens: 500, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 } } });
 
 		const feed = activityFeed();
 		const knownJob = feed.jobs.find((j) => j.id === known.id)!;
@@ -95,6 +97,7 @@ test("activityFeed: contextLimit is the server's live-catalog join (owner amendm
 		const bareJob = feed.jobs.find((j) => j.id === bare.id)!;
 		assert.equal(bareJob.contextLimit, null, "no usage yet → no context line");
 		assert.equal(bareJob.costUsd, null);
+		assert.equal(feed.jobs.find((j) => j.id === reviewed.id)?.contextLimit, 1_048_575, "a review call uses its own model's context window");
 	} finally {
 		fs.unlinkSync(`${PATHS.chats}/${chat.id}.json`);
 		const jobsDir = path.join(PATHS.data, "jobs");

@@ -85,8 +85,8 @@ test("a missing provider fails visibly, and a retry creates one new job",async()
 	assert.equal(job.status,"error");assert.match(job.error!,/teaching model/);
 	const retry=queueLessonAnimation(f,"lesson","explanation",{retry:true});assert.notEqual(retry.id,job.id);assert.equal(queueLessonAnimation(f,"lesson","explanation",{retry:true}).id,retry.id);
 });
-test("chat offers an animation action and displays the finished local video inline",()=>{
-	let html=renderToStaticMarkup(<LessonAnimationAction chatId="lesson" sourceMessageId="explanation"/>);assert.match(html,/Generate animation/);assert.doesNotMatch(html,/<video/);
+test("chat offers a visual action and displays the finished local video inline",()=>{
+	let html=renderToStaticMarkup(<LessonAnimationAction chatId="lesson" sourceMessageId="explanation"/>);assert.match(html,/Generate visual/);assert.doesNotMatch(html,/<video/);
 	const f=fixture();const job=queueLessonAnimation(f,"lesson","explanation");job.status="done";job.result=artifact;
 	html=renderToStaticMarkup(<JobsContext.Provider value={[job]}><LessonAnimationAction chatId="lesson" sourceMessageId="explanation"/></JobsContext.Provider>);
 	assert.match(html,/<video/);assert.doesNotMatch(html,/Generate animation/);

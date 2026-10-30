@@ -235,7 +235,7 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 				: isProviderKeyRefusal(job.error)
 					? "needs a provider key"
 					: (job.activity ?? ""),
-			model: usage?.model,
+			model: lastStep?.model ?? usage?.model,
 			steps: usage?.steps,
 		};
 	});

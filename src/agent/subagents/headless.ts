@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { standardFontsDir } from "./pdf-ops";
+import { offlineDemoDocument } from "../../core/demo-quality.ts";
 
 /**
  * Verification engines for sub-agents: demos use the app's own Electron
@@ -20,6 +21,9 @@ import { standardFontsDir } from "./pdf-ops";
  */
 
 export interface DemoRunResult {
+	/** Actual browser pixels, only when explicitly requested for an independent review. */
+	screenshot?: Buffer;
+	screenshotError?: string;
 	/** console.error / console messages of type "error". */
 	consoleErrors: string[];
 	/** Uncaught exceptions (window.onerror / unhandled rejections). */
@@ -33,6 +37,9 @@ export interface DemoRunResult {
 }
 
 export interface RunDemoOptions {
+	captureScreenshot?: boolean;
+	/** Match delivery's opaque-origin iframe and disallow external resources. */
+	sandboxed?: boolean;
 	/** How long to let the page settle (animations, async CDN loads) — default 2s. */
 	settleMs?: number;
 	/** Optional JS expression evaluated in the page after settling; its value
@@ -284,35 +291,77 @@ async function runDemo(html: string, opts: RunDemoOptions = {}): Promise<DemoRun
 	const settleMs = opts.settleMs ?? 2000;
 	const dir = tempDir("lh-demo-");
 	const file = path.join(dir, "demo.html");
-	fs.writeFileSync(file, html, "utf-8");
+	const escapeAttribute = (s: string) => s.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+	const document = opts.sandboxed ? `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:960px}iframe{display:block;width:100%;height:1800px;border:0}</style><iframe id="learning-test-frame" sandbox="allow-scripts" srcdoc="${escapeAttribute(offlineDemoDocument(html))}"></iframe>` : html;
+	fs.writeFileSync(file, document, "utf-8");
 
 	const consoleErrors: string[] = [];
 	const pageErrors: string[] = [];
 	const failedRequests: string[] = [];
 	let probeResult: unknown;
 	let probed = false;
+	let screenshot: Buffer | undefined;
+	let screenshotError: string | undefined;
 
 	try {
 		await withBrowserPage(async (page) => {
-		page.on("console", (msg) => {
+		const onConsole = (msg: import("puppeteer-core").ConsoleMessage) => {
 			if (msg.type() === "error") consoleErrors.push(msg.text());
-		});
-		page.on("pageerror", (err) => pageErrors.push(err instanceof Error ? err.message : String(err)));
-		page.on("requestfailed", (req) => failedRequests.push(`${req.url()} (${req.failure()?.errorText ?? "failed"})`));
+		};
+		const onPageError = (err: unknown) => pageErrors.push(err instanceof Error ? err.message : String(err));
+		const onRequestFailed = (req: import("puppeteer-core").HTTPRequest) => failedRequests.push(`${req.url()} (${req.failure()?.errorText ?? "failed"})`);
+		page.on("console", onConsole); page.on("pageerror", onPageError); page.on("requestfailed", onRequestFailed);
 
 		try {
+			if(opts.sandboxed) await page.setViewport({width:960,height:720});
 			await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
 			await new Promise((resolve) => setTimeout(resolve, settleMs));
 			if (opts.probe) {
 				try {
-					probeResult = await page.evaluate(opts.probe);
+					const context = opts.sandboxed ? page.frames().find((frame) => frame.parentFrame() === page.mainFrame()) : page.mainFrame();
+					if (!context) throw new Error("The sandboxed learning document did not load.");
+					// Evaluate through CDP in the child's execution context. A result sent
+					// through postMessage could be forged by the document under test.
+					let probeTimer: ReturnType<typeof setTimeout> | undefined;
+					try {
+						probeResult = await Promise.race([
+							context.evaluate(opts.probe),
+							new Promise<never>((_, reject) => { probeTimer = setTimeout(() => reject(new Error("Interaction probe exceeded eight seconds.")), 8000); }),
+						]);
+					} finally { if (probeTimer) clearTimeout(probeTimer); }
 				} catch (err) {
 					pageErrors.push(`probe failed: ${err instanceof Error ? err.message : String(err)}`);
 				}
 				probed = true;
 			}
+			if (opts.captureScreenshot) {
+				let captureSession: import("puppeteer-core").CDPSession | undefined;
+				try {
+					let captureHeight = 720;
+					if (opts.sandboxed) {
+						const frame = page.frames().find((f) => f.parentFrame() === page.mainFrame());
+						if (frame) {
+							const bodyHeight = await frame.evaluate("document.body ? document.body.getBoundingClientRect().height + 36 : 720");
+							captureHeight = Math.min(1200, Math.max(160, Number(bodyHeight) || 720));
+						}
+					}
+					const captureWidth = Math.min(1280, page.viewport()?.width || 960);
+					// Raw CDP has a bounded request and does not hold Puppeteer's global
+					// screenshot mutex if an invisible Electron compositor stalls.
+					captureSession = await page.createCDPSession();
+					const captured = await captureSession.send("Page.captureScreenshot", {
+						format: "png", fromSurface: true, captureBeyondViewport: false,
+						clip: { x: 0, y: 0, width: captureWidth, height: captureHeight, scale: 1 },
+					}, { timeout: 8000 });
+					screenshot = providerSafePng(Buffer.from(captured.data, "base64"));
+				} catch (error) {
+					screenshotError = error instanceof Error ? error.message : String(error);
+				} finally { await captureSession?.detach().catch(() => {}); }
+			}
 		} catch (err) {
 			pageErrors.push(err instanceof Error ? err.message : String(err));
+		} finally {
+			page.off("console",onConsole);page.off("pageerror",onPageError);page.off("requestfailed",onRequestFailed);
 		}
 		});
 	} finally {
@@ -324,6 +373,8 @@ async function runDemo(html: string, opts: RunDemoOptions = {}): Promise<DemoRun
 	}
 
 	return {
+		...(screenshot?{screenshot}:{}),
+		...(screenshotError?{screenshotError}:{}),
 		consoleErrors,
 		pageErrors,
 		failedRequests,

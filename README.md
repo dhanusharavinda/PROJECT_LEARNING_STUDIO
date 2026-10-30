@@ -2,7 +2,7 @@
 
 This project combines LearnHarness teaching with a local ManimGX animated blackboard. Synapse remains a separate notebook.
 
-Run `dist/Learning Studio-0.4.0-studio.3-x64-setup.exe` to install the Windows application. You can play the sample board without an API key. When you have a DeepSeek key, add it inside the app and choose **Use recommended**, then **Save models**. For local learning, choose a downloaded Ollama model and turn on **Offline learning** in Providers.
+Run `dist/Learning Studio-0.4.0-studio.4-x64-setup.exe` to install the Windows application. Visual teaching includes interactive experiments, code-driven 2D and 3D ManimGX animations, and reviewed diagrams directly in chat. Choose a format under **Generate visual**, and pause motion using **Animations** in the header. You can play the sample board without an API key. Add your own provider key inside the app, or choose an installed Ollama model and turn on **Offline learning** in Providers.
 
 See [the Learning Studio guide](docs/learning-studio.md) for setup, animation limits, lesson export, build instructions, and attribution. The original LearnHarness documentation follows.
 

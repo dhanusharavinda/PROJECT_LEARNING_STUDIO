@@ -88,8 +88,9 @@ describe("Animated teacher board", () => {
 	});
 	it("grounds the tool in lesson context and checks learning after playback", () => {
 		const prompt = composeInstructions("teacher");
-		assert.match(prompt, /Ground captions and numerical examples in the learner/);
-		assert.match(prompt, /Watching a video does not establish mastery/);
+		assert.match(prompt, /prediction/);
+		assert.match(prompt, /formulas, assumptions/);
+		assert.match(prompt, /title.*brief/);
 	});
 	it("defines completion as an artifact, not proof of learning", () => {
 		assert.equal(isSubagentFailure("animation", artifact), false);

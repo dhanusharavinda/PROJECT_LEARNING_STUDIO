@@ -4,7 +4,7 @@ Learning Studio is a separate Windows desktop application. LearnHarness remains 
 
 ## First use
 
-Run `dist/Learning Studio-0.4.0-studio.3-x64-setup.exe` from this project to install the application. The installer lets you choose a location and includes its own Python renderer. A separate system Python installation is not required.
+Run `dist/Learning Studio-0.4.0-studio.4-x64-setup.exe` from this project to install the application. The installer lets you choose a location and includes its own Python renderer. A separate system Python installation is not required.
 
 ### Offline learning
 
@@ -32,41 +32,50 @@ Click the top-left logo, whose hover label is **Knowledge graph**, to open Home.
 
 ## How the two engines work together
 
-LearnHarness owns the conversation, prerequisite assessment, practice, saved lessons, and knowledge graph. Its new animation tool supplies a validated scene plan to the bundled ManimGX renderer. ManimGX returns a local video and poster, displayed as a card directly inside the lesson conversation with playback, chapters, and download. The teacher then asks a question to check understanding. Shared instructions tell all model roles never to use em dashes in newly generated text.
+LearnHarness owns the conversation, prerequisite assessment, practice, saved lessons, and knowledge graph. A visual director reads the current lesson and chooses a live experiment, a directed animation, or a precise diagram. A specialist writes and tests the instrument. An independent reviewer checks the mathematics and actual rendered image before publication. The teacher uses the result for prediction and understanding checks. Shared instructions tell all model roles never to use em dashes in newly generated text.
 
-`Question -> LearnHarness teacher -> Scene plan -> ManimGX -> Animation card -> Understanding check`
+`Question -> LearnHarness teacher -> Visual director -> Author and test -> Review and repair -> Inline instrument -> Understanding check`
 
 ## A RAG lesson
 
-Explicit requests such as **Teach RAG visually** or **Generate an animation for this** now trigger a saved animation job even if the teacher does not choose the animation tool. This works in Teaching and Practice, including while a question is waiting for an answer. A request to animate a concept should not become a Manim programming exam. It uses the current lesson context and the lesson's selected model, including offline Ollama. Automatic subscription-provider calls respect that connection's background-use preference. If those calls are disabled, the inline error offers a direct manual request instead.
+Explicit requests such as **Teach RAG visually** or **Build an interactive gradient descent experiment** trigger a saved visual job even if the teacher does not choose a visual tool. This works in Teaching and Practice, including while a question is waiting for an answer. A request to animate a concept should not become a Manim programming exam. It uses the lesson context and the selected strong teaching model, including offline Ollama. Automatic subscription-provider calls respect that connection's background-use preference. If those calls are disabled, make a direct manual request instead.
 
-Each saved explanation has a compact **Generate animation** action. The action becomes progress feedback and then a playable video in the same place. Repeated clicks share a running job, and finished media remains available after reopening the lesson. A failure offers **Retry animation**. These direct boards do not wake the teacher, duplicate the video elsewhere, or require completing a quiz before playback. A saved validated plan can be reused after an interrupted render without another model call. Native teacher-dispatched boards retain their existing follow-up teaching behavior.
+Each saved explanation has a compact **Generate visual** action. Its dropdown offers **Choose best visual**, **Interactive demo**, **Animation**, and **Diagram**. Progress and the finished instrument appear in the same place. Repeated clicks share a running job, and finished results remain available after reopening the lesson. Failures offer **Retry visual**. Direct requests do not wake the teacher or require completing a quiz first. Native teacher-dispatched instruments retain follow-up teaching behavior and are also visible while a quiz is pending.
 
-Rendering runs locally without a per-render API fee. Planning can use the selected cloud model and incur provider charges. Offline Ollama planning has no API charge, but still uses the computer's resources. Plans stay bounded to short boards, with no narration or paid fallback.
+The **Animations** switch in the chat header pauses saved videos and interactive motion without resetting their state. Turning it off disables new moving visuals. **Generate diagram** remains available. The preference is saved locally. No narration or paid fallback is enabled automatically.
 
 Ask: **Explain RAG. Check whether I understand embeddings first, then animate indexing separately from retrieval and answering.**
 
-The teacher first establishes prerequisites, explains the concept, and can request an `animation` job while continuing the lesson. Its structured plan contains the actual concept labels, connections, captions, and teaching beats. ManimGX inspects the layout and renders it locally. The resulting card provides standard playback, chapter jumps, MP4 download, and **Check my understanding**. A failed render reports the failure and offers **Ask teacher to retry**. The activity dock supports canceling background work. Identical successful scene plans reuse validated saved media.
+The teacher first establishes prerequisites, explains the concept, and requests a visual job while continuing the lesson. An interactive RAG experiment can change retrieval inputs and compute the result. A directed ManimGX scene can show indexing and query-time retrieval in sequence. Animation cards provide playback, chapters, MP4 download, and **Check my understanding**. HTML and Python source are available under **View code** with a copy action. The activity dock supports cancelling background work.
 
 RAG indexing should show documents, chunks, embeddings, and an index. Query-time explanation should distinguish the question, retrieval of evidence, and an answer grounded in that evidence. The teacher should then ask about retrieval errors and require a numerical, explanatory, or coding task. Watching a video does not establish mastery.
 
-## Blackboard vocabulary
+## Complex visuals and verification
 
-The first integrated tool supports multi-beat flows, two-dimensional vectors with computed cosine similarity, gradient descent on a specified quadratic, and text explanation boards. Plans are bounded to eight beats and sixty seconds. Flow references and numeric bounds are checked before rendering. The compiler generates fixed Python from validated data; the model does not receive arbitrary Python or shell execution. This integration does not expose every ManimGX API or promise arbitrary three-dimensional simulations.
+New animation requests can author code-driven ManimGX scenes, including 2D and 3D geometry, surfaces, camera movement, equations, matrices, transforms, plots and vector fields. They are no longer confined to the original four templates. Existing saved structured boards still render through their compatible path.
 
-The app retains existing interactive HTML demos and SVG figures. A slider-driven experiment can use a demo, a static spatial figure can use SVG, and an ordered animated explanation can use ManimGX. An animation is not required for every answer.
+Generated scene code runs in a restricted drawing and mathematics interpreter. It is not unrestricted Python and is not an operating-system sandbox. Arbitrary file, network and system access, imports, reflection and private attributes are excluded. Runtime, memory, array, loop and object limits apply. These boundaries intentionally exclude unsupported APIs that could bypass the drawing interface.
+
+Interactive HTML uses real computed values and labeled parameter controls, with pause, single-step and reset. A browser test operates those controls inside the same opaque-origin, network-blocked sandbox used for delivery. Known numerical examples must pass. A separate model reviews the source and actual pixels, can reject incorrect formulas or clipped labels, and requests repairs. Native scenes execute mathematical assertions and receive storyboard review. Testing and model review improve reliability but do not prove every mathematical claim.
+
+Example requests:
+
+- **Build a 3D gradient descent experiment for f(x,y)=0.5x^2+y^2. Let me change learning rate and start coordinates. Explain convergence and divergence.**
+- **Show a neural network forward pass. Let me change an input and weight and inspect the computed activations. Distinguish this toy network from a full language model.**
+- **Animate a matrix transforming a grid, then let me test how its determinant changes area.**
+- **Teach attention using the actual QK-transpose, scaling and softmax operations, with a small worked example.**
 
 ## Available visual formats
 
 | Format | Best use | Example request |
 | --- | --- | --- |
 | Interactive HTML demo | Sliders, simulations, sampling and experiments | Build a demo where I adjust chunk size and retrieval threshold. |
-| ManimGX animation | A process or transformation revealed in steps | Teach RAG visually with separate indexing and query-time stages. |
+| Code-driven ManimGX animation | Equations, transformations and complex 2D or 3D explanations | Show gradient descent on a 3D loss surface with a moving camera. |
 | Static SVG figure | Precise plots, coordinates, geometry and vectors | Draw two vectors with their angle and projections. |
 | Inline Mermaid diagram | Flows, architecture, relationships and sequences | Show a sequence diagram of a RAG request. |
 | Rendered mathematics | Equations and worked calculations | Work through cosine similarity numerically. |
 
-The integrated ManimGX scene types are flows, two-dimensional vectors, gradient descent on x squared, and text explanation boards. Other ManimGX APIs and arbitrary Python scenes are not exposed by this integration. Images and PDFs can supply lesson material, but there is no built-in generative-image service.
+Reference interactive instruments are bundled at `/studio/interactive/gradient-descent-3d.html` and `/studio/interactive/neural-signal-flow.html` for inspection. New lessons are authored from their context rather than relabeled from these examples. Images and PDFs can supply lesson material, but there is no built-in generative-image service.
 
 ## Save material into Synapse
 
@@ -74,7 +83,7 @@ Use **Save lesson as Markdown** in the lesson's top bar. It exports readable tea
 
 ## Cost and privacy
 
-Teaching and other model calls use the provider selected in settings. ManimGX rendering is local and makes no paid model request of its own. The animation plan is authored in the teacher's existing response, avoiding a separate model call for generating scene code. There is no automatic cloud voice generation. Existing provider usage displays are estimates, not a hard dollar billing limit. Use provider account controls for spending limits. A local model endpoint remains available, but models labeled `cloud` are remote even when accessed through Ollama.
+Teaching and other model calls use the providers selected in settings. The visual director, code author and independent reviewer make additional model calls and repairs can add more. Rich authoring uses the lesson's strong model; image review uses a configured image-capable model. Each call is attributed to its actual model in the usage estimate, including mixed providers. ManimGX rendering itself runs locally without a per-render service fee. There is no automatic cloud voice generation. Usage displays are estimates, not a hard billing limit. Use provider account controls for spending limits. A local endpoint remains available, but models labeled `cloud` are remote even when accessed through Ollama.
 
 The standalone installer includes the renderer and portable Python. It does not require a machine-wide Python installation. The application has a distinct Windows identity and user-data folder. Upstream LearnHarness automatic updates are disabled for this fork, preventing replacement with a build that lacks the blackboard integration. No public release feed has been configured for Learning Studio.
 
@@ -86,7 +95,7 @@ The standalone installer includes the renderer and portable Python. It does not 
 - `npm run desktop:win`: build, curate standalone output, smoke-test with Electron's Node runtime, and create a Windows installer.
 - `npm run desktop:pack`: package an already prepared standalone build.
 
-Use project-local `work/` directories for synthetic test data. Never use a personal notebook for automated tests. The real native smoke receipts distinguish scripted provider transport tests from live model inference. Live DeepSeek quality and latency remain unverified until a key is supplied.
+Use isolated synthetic test directories. Never use a personal notebook for automated tests. Smoke receipts distinguish scripted provider tests, real local-model inference, live cloud generation, numerical browser checks and native rendering. A successful sample is evidence for that sample, not a promise that every requested scene will generate perfectly.
 
 ## Attribution and licenses
 

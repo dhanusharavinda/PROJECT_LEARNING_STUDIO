@@ -32,8 +32,11 @@ import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
 import { runResearcherAgent } from "./researcher.ts";
 import { runVisualMaker } from "./visual-maker.ts";
-import { isLessonAnimationRequest, type LessonAnimationRequest } from "../../core/lesson-animation.ts";
+import { isLessonAnimationRequest, isCodedManimRequest, type CodedManimRequest, type LessonAnimationRequest } from "../../core/lesson-animation.ts";
 import { planLessonAnimation } from "./animation-planner.ts";
+import { visualFormatDisabledMessage, type VisualFormat } from "../../core/visual-learning.ts";
+import { directLessonVisual } from "./visual-director.ts";
+import { runManimSceneBuilder, type ManimSceneBuilderOptions } from "./manim-scene-builder.ts";
 
 /**
  * The background job runner (contracts.ts "THE ASYNC PROTOCOL" §2–3), created
@@ -62,13 +65,18 @@ import { planLessonAnimation } from "./animation-planner.ts";
  */
 export const researchModelOverride: { current?: PiEngine } = {};
 export const demoModelOverride: { current?: PiEngine } = {};
+export const demoReviewModelOverride: { current?: PiEngine } = {};
 export const visualModelOverride: { current?: PiEngine } = {};
 export const pdfModelOverride: { current?: PiEngine } = {};
 
 /** The dispatch-time tool input (from src/agent/tools/jobs.ts schemas). */
-type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput | PdfToolInput | BlackboardPlan | LessonAnimationRequest;
+type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput | PdfToolInput | BlackboardPlan | LessonAnimationRequest | CodedManimRequest;
 
 export interface JobRunnerDeps {
+	manimSceneRuntime?: Pick<ManimSceneBuilderOptions,"validateSource"|"renderScene"|"storyboard">;
+	animationReviewEngineFor?: (chatId: string, automatic: boolean) => PiEngine | undefined;
+	visualAnimationsEnabled?: () => boolean;
+	visualFormatEnabled?: (format: Exclude<VisualFormat,"auto">) => boolean;
 	animationEngineFor?: (chatId: string, automatic: boolean) => PiEngine | undefined;
 	renderBlackboard?: (plan: BlackboardPlan, options: { signal: AbortSignal; onProgress: (line: string) => void }) => Promise<BlackboardArtifact>;
 	chatStore: ChatStore;
@@ -133,10 +141,19 @@ const KIND_ROLE: Record<Exclude<JobKind, "animation">, ModelRole> = {
 
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	const { chatStore, jobStore, deliver } = deps;
+	const enabledFormat = (format: Exclude<VisualFormat,"auto">) => (format === "diagram" || deps.visualAnimationsEnabled?.() !== false) && deps.visualFormatEnabled?.(format) !== false;
+	function requireFormat(format: Exclude<VisualFormat,"auto">) {
+		if (format !== "diagram" && deps.visualAnimationsEnabled?.() === false) throw new Error("Animations are off. Choose Diagram or turn animations on.");
+		if (!enabledFormat(format)) throw new Error(visualFormatDisabledMessage(format));
+	}
 
 	/** Running usage totals per live job (the loop's onUsage folds here,
 	 * then writes through the job store so the poll sees progress). */
 	const usageTotals = new Map<string, JobUsage>();
+	function recordUsage(jobId: string, model: string, step: UsageStepLike) {
+		const next=accumulateJobUsage(usageTotals.get(jobId) ?? jobStore.getJob(jobId)?.usage,model,step);
+		usageTotals.set(jobId,next); jobStore.updateJob(jobId,{usage:next});
+	}
 
 	function makeLoopContext(jobId: string, engine: PiEngine, controller = new AbortController()): LoopContext {
 		const chatId = jobStore.getJob(jobId)?.chatId;
@@ -151,9 +168,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			abortSignal: controller.signal,
 			chatId,
 			onUsage: (step) => {
-				const next = accumulateJobUsage(usageTotals.get(jobId), model, step);
-				usageTotals.set(jobId, next);
-				jobStore.updateJob(jobId, { usage: next }); // merge patch — status untouched
+				recordUsage(jobId,model,step);
 			},
 		};
 	}
@@ -200,6 +215,11 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			return;
 		}
 		if (job.status !== "running") return; // already finished / re-run after crash recovery
+		const receivedVisual = resolveInput(job, input);
+		if ((isLessonAnimationRequest(receivedVisual) && !receivedVisual.plan && deps.manimSceneRuntime) || isCodedManimRequest(receivedVisual)) {
+			await runContextVisual(job, receivedVisual as LessonAnimationRequest | CodedManimRequest);
+			return;
+		}
 		if (job.kind === "animation") {
 			const received = resolveInput(job, input);
 			const request = isLessonAnimationRequest(received) ? received : undefined;
@@ -208,6 +228,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			registerJobAbort(jobId, controller);
 			try {
 				if (!jobContext(jobId)) return;
+				requireFormat("video");
 				if (!deps.renderBlackboard) throw new Error("Animated board renderer is unavailable. Restart the application and try again.");
 				if (request && !animationPlan) {
 					const engine = deps.animationEngineFor?.(job.chatId, request.automatic);
@@ -236,7 +257,6 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			jobStore.updateJob(jobId, { status: "error", error: `unknown kind ${job.kind}`, activity: "failed" });
 			return;
 		}
-		const engine = pickEngine(job.kind);
 		// The per-need refusal guards (BYOK 2026-09-22 / provider-key
 		// interlude 2026-09-25): no engine for the kind's tier, or the
 		// resolved engine's provider key gone — both refuse through the SAME
@@ -275,6 +295,15 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 								};
 			await finishJob(jobId, failure);
 		};
+		let engine: PiEngine | undefined;
+		try {
+			if (job.kind === "demo") requireFormat("interactive");
+			if (job.kind === "visual") requireFormat("diagram");
+			engine = job.kind === "demo" && !demoModelOverride.current && deps.animationEngineFor ? deps.animationEngineFor(job.chatId,true) : pickEngine(job.kind);
+		} catch (error) {
+			await refuse(error instanceof Error ? error.message : String(error));
+			return;
+		}
 		if (!engine) {
 			const tier = ROLE_SLOT[KIND_ROLE[job.kind]];
 			const envelope = modelsNotConfigured([tier]);
@@ -304,6 +333,59 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			if (usage) jobStore.updateJob(jobId, { usage });
 			usageTotals.delete(jobId);
 		}
+	}
+
+	async function runContextVisual(job: JobRecord, request: LessonAnimationRequest | CodedManimRequest) {
+		const controller = new AbortController(); registerJobAbort(job.id,controller);
+		const contextual = isLessonAnimationRequest(request);
+		let format = contextual ? request.resolvedFormat : "video" as const;
+		let title = contextual ? request.visualTitle || "Visual explanation" : request.title;
+		try {
+			if (!jobContext(job.id)) return;
+			const allowedFormats = (["interactive", "video", "diagram"] as const).filter(enabledFormat);
+			if (!allowedFormats.length) throw new Error("All visual formats are turned off. Enable a format in Settings, Agent.");
+			if (format) requireFormat(format);
+			if (contextual && request.preferredFormat && request.preferredFormat !== "auto") requireFormat(request.preferredFormat);
+			const engine = deps.animationEngineFor?.(job.chatId, contextual ? request.automatic : true);
+			if (!engine) throw new Error("Choose a teaching model in Providers before generating a visual.");
+			if (deps.providerKeyMissing?.(engine.model.provider,"strong")) throw new Error("Connect your teaching provider, then try again.");
+			const loop = makeLoopContext(job.id,engine,controller);
+			const onActivity = (activity:string) => { if(stillRunning(job.id)) jobStore.updateJob(job.id,{activity}); };
+			let brief = contextual ? request.visualBrief : request.brief;
+			if (!format || !brief) {
+				onActivity("Choosing the clearest visual explanation");
+				const preferred = deps.visualAnimationsEnabled?.() === false ? "diagram" : contextual ? request.preferredFormat || "auto" : "video";
+				const direction = await directLessonVisual(contextual ? request.context : request.brief,preferred,engine,{signal:controller.signal,onUsage:usage=>loop.onUsage(piUsageToStep(usage)),chatId:job.chatId,allowedFormats});
+				format=direction.format; brief=direction.brief; title=direction.title;
+				if (!stillRunning(job.id)) return;
+				jobStore.updateJob(job.id,{kind:format==="interactive"?"demo":format==="diagram"?"visual":"animation",input:contextual?{...request,resolvedFormat:format,visualBrief:brief,visualTitle:title}:request});
+			}
+			requireFormat(format);
+			if (!stillRunning(job.id)) return;
+			let result: DemoResult | VisualResult | BlackboardArtifact;
+			const preciseBrief = `${brief}\n\nTeaching requirements: use the requested concept and actual formulas; explain assumptions and projections. Compute values instead of animating arbitrary data. Include meaningful independent numerical or structural checks. Keep labels clear and readable. Never use em dashes.`;
+			const reviewEngine=demoReviewModelOverride.current ?? deps.animationReviewEngineFor?.(job.chatId,contextual?request.automatic:true) ?? (engine.model.input.includes("image")?engine:undefined);
+			if (format!=="diagram" && deps.animationReviewEngineFor && !reviewEngine) throw new Error("Choose a vision-capable model in Providers so the generated visual can be independently checked.");
+			if (format==="interactive") {
+				onActivity("Building and testing the interactive explanation");
+				result=await runDemoBuilder({title,brief:preciseBrief},{engine,reviewEngine,requireRenderReview:!!deps.animationReviewEngineFor,onReviewUsage:usage=>recordUsage(job.id,`${reviewEngine!.model.provider}:${reviewEngine!.model.id}`,piUsageToStep(usage)),abortSignal:controller.signal,chatId:job.chatId,onUsage:usage=>loop.onUsage(piUsageToStep(usage)),onActivity,requireInteractionVerification:true});
+			} else if (format==="diagram") {
+				onActivity("Drawing and checking the diagram");
+				const visualEngine=engine.model.input.includes("image")?engine:deps.animationReviewEngineFor?.(job.chatId,contextual?request.automatic:true);
+				if (!visualEngine) throw new Error("Choose a vision-capable model to check the generated diagram.");
+				result=await runVisualMaker({brief:preciseBrief},{engine:visualEngine,abortSignal:controller.signal,chatId:job.chatId,onUsage:usage=>recordUsage(job.id,`${visualEngine.model.provider}:${visualEngine.model.id}`,piUsageToStep(usage)),onActivity});
+			} else {
+				if (!deps.manimSceneRuntime) throw new Error("The code-driven ManimGX runtime is unavailable. Reinstall the current application.");
+				onActivity("Authoring and reviewing the ManimGX scene");
+				result=await runManimSceneBuilder({title,brief:preciseBrief},{...deps.manimSceneRuntime,engine,visionEngine:reviewEngine,abortSignal:controller.signal,chatId:job.chatId,onUsage:usage=>loop.onUsage(piUsageToStep(usage)),onReviewUsage:(usage,model)=>recordUsage(job.id,model,piUsageToStep(usage)),onActivity});
+			}
+			await finishJob(job.id,result);
+		} catch(error) {
+			if (controller.signal.aborted || !stillRunning(job.id)) return;
+			const reason=error instanceof Error?error.message:String(error); jobStore.updateJob(job.id,{error:reason});
+			const current=jobStore.getJob(job.id)!;
+			await finishJob(job.id,current.kind==="demo"?{title,html:"",tested:true,notes:`FAILED: ${reason}`} : current.kind==="visual"?{svg:"",notes:`FAILED: ${reason}`} : {id:"",title,url:"",posterUrl:"",durationSeconds:0,sections:[],cacheHit:false,engine:"manimgx",notes:reason});
+		} finally { unregisterJobAbort(job.id); usageTotals.delete(job.id); }
 	}
 
 	/** Dispatch input wins, then the job's saved arguments. Legacy jobs
@@ -347,6 +429,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			result,
 			status: failed ? "error" : "done",
 			activity: failed ? "failed" : "finished",
+			...(failed && !job.error && "notes" in result && typeof result.notes === "string" ? { error: result.notes.replace(/^FAILED:\s*/, "").slice(0, 2500) } : {}),
 			...(!isLessonAnimationRequest(job.input) ? { delivery: { kind: "result" as const, status: "pending" as const } } : {}),
 		});
 		// On-demand boards are displayed directly under their source explanation.
@@ -459,12 +542,18 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
 		try {
 			jobStore.updateJob(jobId, { activity: "building demo" });
+			const reviewEngine=demoReviewModelOverride.current ?? deps.animationReviewEngineFor?.(job.chatId,true) ?? (model?.model.input.includes("image")?model:undefined);
+			if(deps.animationReviewEngineFor&&!reviewEngine) throw new Error("Choose a vision-capable model to review the interactive visual.");
 			const result = await runDemoBuilder(
 				{ title, brief },
 				{
 					engine: model,
 					abortSignal: loop.abortSignal,
 					chatId: loop.chatId,
+					requireInteractionVerification: true,
+					requireRenderReview: !!deps.animationReviewEngineFor,
+					reviewEngine,
+					onReviewUsage:usage=>recordUsage(jobId,`${reviewEngine!.model.provider}:${reviewEngine!.model.id}`,piUsageToStep(usage)),
 					onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
 					onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
 				},

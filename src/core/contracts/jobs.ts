@@ -114,6 +114,7 @@ export function accumulateJobUsage(
 	const add = (a: number | undefined, b: number | undefined): number | undefined =>
 		a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
 	const call: CallUsage = {
+		...(total && total.model!==model ? {model} : {}),
 		inputTokens: step.inputTokens,
 		outputTokens: step.outputTokens,
 		cacheReadTokens: step.inputTokenDetails?.cacheReadTokens,
@@ -122,7 +123,7 @@ export function accumulateJobUsage(
 		reasoningTokens: step.outputTokenDetails?.reasoningTokens,
 	};
 	return {
-		model,
+		model: total?.model ?? model,
 		inputTokens: add(total?.inputTokens, step.inputTokens),
 		outputTokens: add(total?.outputTokens, step.outputTokens),
 		cacheReadTokens: add(total?.cacheReadTokens, step.inputTokenDetails?.cacheReadTokens),

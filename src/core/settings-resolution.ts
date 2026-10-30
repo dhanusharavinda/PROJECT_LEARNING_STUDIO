@@ -24,6 +24,7 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { offlineSpec, OLLAMA_PROVIDER } from "./offline.ts";
+import { visualLearningEnabled } from "./visual-learning.ts";
 import type { ModelRole } from "../../config.ts";
 import type { ChatSettings } from "./contracts/chat.ts";
 import type { SearchEngineId } from "./search.ts";
@@ -195,7 +196,7 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 		},
 		agent: {
 			models,
-			tools: local ? { ...agent.tools, research: false } : agent.tools ?? {},
+			tools: { ...agent.tools, ...(local ? { research: false } : {}), ...(!visualLearningEnabled(record) ? { animation: false, demo: false } : {}) },
 			prompts: agent.prompts ?? {},
 			search: agent.search ?? {},
 			graphTools: agent.graphTools ?? {},

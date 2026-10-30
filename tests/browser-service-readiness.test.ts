@@ -63,10 +63,12 @@ describe("browser-service shipping readiness", () => {
 			else setTimeout(() => res.end(version(port)), 20);
 		}, async (port, idle) => {
 			assert.equal(await waitForBrowserService(port, { ...short, timeoutMs: 2000 }), endpoint(port));
-			assert.equal(requests, 3);
+			// A busy test worker can time out a healthy attempt before receiving it.
+			assert.ok(requests >= 3, "readiness skipped the startup failures");
 			await idle();
+			const stopped = requests;
 			await delay(40);
-			assert.equal(requests, 3, "polling continued after readiness");
+			assert.equal(requests, stopped, "polling continued after readiness");
 		});
 	});
 

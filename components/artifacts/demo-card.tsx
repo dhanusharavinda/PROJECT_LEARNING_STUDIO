@@ -8,6 +8,9 @@ import { ChatActionsContext } from "@/components/chat";
 import { downloadFile, slugFilename } from "@/components/artifacts/download";
 import { DispatchCard } from "@/components/artifacts/dispatch-card";
 import type { ArtifactPartProps, DemoResult } from "@/src/core";
+import { useVisualLearning } from "@/components/visual-learning-toggle";
+import { SourceCode } from "./source-code";
+import { JobsContext } from "@/components/jobs-context";
 
 /**
  * Demo artifact card (W6): while the part is input-available, a job activity
@@ -46,10 +49,37 @@ setTimeout(post,50);
 setTimeout(post,400);
 })();</script>`;
 
-/** Inject the bridge before </body> (or at the end of a body-less document). */
-export function buildDemoSrcDoc(html: string): string {
-	if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, `${DEMO_BRIDGE_SCRIPT}</body>`);
-	return `${html}${DEMO_BRIDGE_SCRIPT}`;
+/** Install motion control before authored scripts, after any document policy. */
+export function demoMotionScript(initialEnabled: boolean): string {
+	return `<script>(function(){
+var clock=performance.now.bind(performance),enabled=${initialEnabled ? "true" : "false"},pausedAt=enabled?null:clock(),pausedDuration=0,nextFrame=1;
+var raf=requestAnimationFrame.bind(window),cancel=cancelAnimationFrame.bind(window),timeout=setTimeout.bind(window),clear=clearTimeout.bind(window),interval=setInterval.bind(window);
+var frames=new Map(),timers=new Map(),animations=[],media=[];
+try{Object.defineProperty(performance,'now',{configurable:true,value:function(){return(enabled?clock():pausedAt)-pausedDuration}})}catch(e){}
+var style=document.createElement('style');style.textContent='html[data-learning-motion="paused"] *,html[data-learning-motion="paused"] *::before,html[data-learning-motion="paused"] *::after{animation-play-state:paused!important;transition:none!important}';(document.head||document.documentElement).appendChild(style);
+var nativeAnimate=Element.prototype.animate;if(nativeAnimate)Element.prototype.animate=function(){var animation=nativeAnimate.apply(this,arguments);if(!enabled){animation.pause();animations.push(animation)}return animation};
+document.addEventListener('play',function(event){if(!enabled&&event.target&&typeof event.target.pause==='function')event.target.pause()},true);
+function frame(id){var entry=frames.get(id);if(!entry||!enabled)return;entry.native=raf(function(time){if(!frames.has(id))return;if(!enabled){entry.native=null;return}frames.delete(id);entry.fn(time-pausedDuration)})}
+window.requestAnimationFrame=function(fn){var id=nextFrame++;frames.set(id,{fn:fn,native:null});frame(id);return id};
+window.cancelAnimationFrame=function(id){var entry=frames.get(id);if(entry&&entry.native!==null)cancel(entry.native);frames.delete(id)};
+window.setTimeout=function(fn,delay){var args=Array.prototype.slice.call(arguments,2);if(typeof fn!=='function')return timeout.apply(window,arguments);var id=timeout(function(){var item=timers.get(id);if(!item)return;if(!enabled){item.pending=true;return}timers.delete(id);fn.apply(window,args)},delay);timers.set(id,{fn:fn,args:args,pending:false});return id};
+window.clearTimeout=function(id){timers.delete(id);clear(id)};
+window.setInterval=function(fn,delay){var args=Array.prototype.slice.call(arguments,2);if(typeof fn!=='function')return interval.apply(window,arguments);return interval(function(){if(enabled)fn.apply(window,args)},delay)};
+function apply(next){if(next===enabled){document.documentElement.dataset.learningMotion=next?'playing':'paused';return}var now=clock();enabled=next;window.__learningMotionEnabled=next;
+if(!next){pausedAt=now;frames.forEach(function(entry){if(entry.native!==null){cancel(entry.native);entry.native=null}});animations=typeof document.getAnimations==='function'?document.getAnimations().filter(function(a){return a.playState==='running'}):[];animations.forEach(function(a){a.pause()});media=Array.from(document.querySelectorAll('video,audio')).filter(function(m){return !m.paused});media.forEach(function(m){m.pause()})}
+else{if(pausedAt!==null)pausedDuration+=now-pausedAt;pausedAt=null;frames.forEach(function(_,id){frame(id)});timers.forEach(function(item,id){if(item.pending){timers.delete(id);timeout(function(){item.fn.apply(window,item.args)},0)}});animations.forEach(function(a){try{a.play()}catch(e){}});media.forEach(function(m){try{var p=m.play();if(p)p.catch(function(){})}catch(e){}});animations=[];media=[]}
+document.documentElement.dataset.learningMotion=next?'playing':'paused';window.dispatchEvent(new CustomEvent('learning-motion-change',{detail:{enabled:next}}));document.dispatchEvent(new CustomEvent('learning-motion-change',{detail:{enabled:next}}))}
+window.__learningMotionEnabled=enabled;document.documentElement.dataset.learningMotion=enabled?'playing':'paused';
+window.addEventListener('message',function(event){if(event.source!==parent||!event.data||event.data.type!=='learning-motion'||typeof event.data.enabled!=='boolean')return;apply(event.data.enabled)});
+})();</script>`;
+}
+
+/** Inject resize/error reporting without giving the iframe app-origin access. */
+export function buildDemoSrcDoc(html: string, initialMotionEnabled = true): string {
+	const motion = demoMotionScript(initialMotionEnabled);
+	const controlled = /<script\b/i.test(html) ? html.replace(/<script\b/i, `${motion}<script`) : /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${motion}</head>`) : `${html}${motion}`;
+	if (/<\/body>/i.test(controlled)) return controlled.replace(/<\/body>/i, `${DEMO_BRIDGE_SCRIPT}</body>`);
+	return `${controlled}${DEMO_BRIDGE_SCRIPT}`;
 }
 
 export interface DemoBridgeState {
@@ -84,7 +114,9 @@ export function reduceDemoBridgeState(state: DemoBridgeState, data: unknown): De
  * is the DispatchCard (live status via the chat view's jobs feed). The demo
  * itself renders from the steer message via DemoOutputCard. */
 export function DemoCard({ part }: ArtifactPartProps) {
+	const job = useContext(JobsContext).find(j => j.toolCallId === part.toolCallId && j.kind === "demo");
 	if (part.state !== "output-available") return null;
+	if (job?.status !== "running" && job?.result && job.delivery?.status === "pending") return <DemoOutputCard output={job.result} />;
 	return <DispatchCard toolCallId={part.toolCallId} kind="demo" />;
 }
 
@@ -137,6 +169,7 @@ function DemoFrame({
 	initialInverted?: boolean;
 }) {
 	const actions = useContext(ChatActionsContext);
+	const motion = useVisualLearning();
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
 	const [state, setState] = useState<DemoBridgeState>(INITIAL_DEMO_BRIDGE_STATE);
 	// Brightness inversion (owner, 2026-10-07): the switch state PERSISTS on
@@ -156,7 +189,11 @@ function DemoFrame({
 			body: JSON.stringify({ input: { messageId, inverted: next } }),
 		}).catch(() => {});
 	};
-	const srcDoc = useMemo(() => buildDemoSrcDoc(html), [html]);
+	// Start paused until the parent supplies its saved preference. Keep srcDoc
+	// stable when toggling so a learner's sliders and model state survive.
+	const srcDoc = useMemo(() => buildDemoSrcDoc(html, false), [html]);
+	const sendMotion = () => iframeRef.current?.contentWindow?.postMessage({ type: "learning-motion", enabled: motion.enabled }, "*");
+	useEffect(() => { iframeRef.current?.contentWindow?.postMessage({ type: "learning-motion", enabled: motion.enabled }, "*"); }, [motion.enabled]);
 
 	useEffect(() => {
 		const onMessage = (event: MessageEvent) => {
@@ -208,6 +245,7 @@ function DemoFrame({
 					onSend={actions ? () => actions.sendText(`The demo "${title}" threw an error: ${state.error}`) : undefined}
 				/>
 			)}
+			{!motion.enabled && <p role="status" className="mt-2 text-xs text-muted-foreground">Animations paused. Your controls stay saved.</p>}
 			<iframe
 				ref={iframeRef}
 				title={title}
@@ -215,6 +253,7 @@ function DemoFrame({
 				// but never touch the app's storage, cookies, or DOM.
 				sandbox="allow-scripts"
 				srcDoc={srcDoc}
+				onLoad={sendMotion}
 				// scrolling OFF (owner, 2026-10-07): the bridge auto-sizes the
 				// iframe to its content, so an internal scrollbar can only appear
 				// before the first resize lands — and a scrollable iframe TRAPS
@@ -232,6 +271,7 @@ function DemoFrame({
 				}}
 				data-testid="demo-iframe"
 			/>
+			<SourceCode code={html} language="HTML" />
 		</div>
 	);
 }

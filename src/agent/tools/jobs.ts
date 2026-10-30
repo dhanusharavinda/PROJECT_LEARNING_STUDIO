@@ -1,5 +1,6 @@
 import type { BlackboardPlan } from "../../core/blackboard.ts";
 import { animationInputSchema, validateAnimationInput } from "./animation.ts";
+import type { CodedManimRequest } from "../../core/lesson-animation.ts";
 import { Type, type Static } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
@@ -24,7 +25,7 @@ export interface JobToolContext {
 	/** Fire the background runner for a fresh job — fire-and-forget. The
 	 *  input rides along because the spawn happens MID-STREAM, before
 	 *  onFinish persists the tool part — a transcript scan would race it. */
-	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput | BlackboardPlan) => void;
+	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput | BlackboardPlan | CodedManimRequest) => void;
 	/** Search-provider availability, retained for existing composition seams.
 	 *  Research dispatch does not depend on it: web_fetch is keyless and
 	 *  web_search reports a missing provider as a recoverable tool result. */
@@ -77,7 +78,7 @@ function dispatch(
 	kind: JobRecord["kind"],
 	toolCallId: string,
 	ack: string,
-	input: ResearchInput | DemoInput | VisualInput | PdfInput | BlackboardPlan,
+	input: ResearchInput | DemoInput | VisualInput | PdfInput | BlackboardPlan | CodedManimRequest,
 ): string {
 	const existing = ctx.jobStore.findJobByToolCallId(ctx.chatId, toolCallId);
 	const job = existing ?? ctx.jobStore.createJob({ kind, chatId: ctx.chatId, toolCallId, input });
@@ -122,6 +123,8 @@ const PDF_DESCRIPTION =
 	"continues; the brief arrives later as a new message. For quick looks at plain text or image files, use the read tool " +
 	"directly instead of dispatching.";
 
+const richAnimationSchema = Type.Union([Type.Object({ title: Type.String({minLength:1,maxLength:120}), brief: Type.String({minLength:40,maxLength:24000,description:"A complete conceptual visual brief: exact math, assumptions, examples, scene structure, 2D/3D geometry, movements, camera and numerical invariants. The author writes and verifies the full ManimGX scene."}) }), animationInputSchema]);
+
 /**
  * Per-request job tool registry: each tool closes over the composition root's
  * context (chatId + jobStore + the spawn seam), so concurrent chats never
@@ -143,9 +146,9 @@ export function jobTools(ctx: JobToolContext): Record<string, AgentTool<any>> {
 		},
 		animation: {
 			name: "animation", label: "Animated board",
-			description: "Render a short ManimGX animated teaching board. Supply a complete structured plan grounded in the current lesson. Use flow for pipelines, vectors for two numerical vectors, gradient_descent for minimizing x squared, text for a worked explanation. Each beat is a replayable chapter. Continue teaching while it renders. Never send Python or code. Prefer 2 to 4 short beats; use demo for adjustable controls and visual for static geometry. After playback, ask the learner a prediction or application question.",
-			parameters: animationInputSchema,
-			execute: serverExecute("animation", animationInputSchema, (input, { toolCallId }) => dispatch(ctx, "animation", toolCallId, "The animated board will arrive in the lesson. Continue teaching now, then use its chapters to check understanding.", validateAnimationInput(input))),
+			description: "Create a mathematically grounded ManimGX visual lesson with full scene authoring: equations, matrix transformations, neural network structure, moving vectors, 3D surfaces, cameras and computed simulations. Prefer title and a detailed brief; the specialist writes code, executes assertions, renders, reviews and repairs it. Use demo for live learner-adjustable controls, animation for a directed visual walkthrough. Explain while it renders, then teach with the returned result. Legacy simple beat plans remain supported.",
+			parameters: richAnimationSchema,
+			execute: serverExecute("animation", richAnimationSchema, (input, { toolCallId }) => dispatch(ctx, "animation", toolCallId, "The visual lesson will arrive here. Continue teaching, then use the result to check understanding.", "brief" in input ? {mode:"manim-scene",title:input.title,brief:input.brief} : validateAnimationInput(input))),
 		},
 		demo: {
 			name: "demo",

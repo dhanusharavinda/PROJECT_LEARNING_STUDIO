@@ -118,6 +118,8 @@ export interface ExtractionRunUsage {
  * flattened to the fields we persist (undefined = provider didn't report;
  * renderers show absent, never zero). */
 export interface CallUsage {
+	/** Present when a job's review call uses a different model from its author. */
+	model?: string;
 	/** Pi-normalized fresh input tokens; cache buckets are disjoint. */
 	inputTokens: number | undefined;
 	outputTokens: number | undefined;

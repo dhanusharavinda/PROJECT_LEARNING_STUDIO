@@ -10,6 +10,7 @@ import { downloadFile } from "@/components/artifacts/download";
 import { DispatchCard } from "@/components/artifacts/dispatch-card";
 import { SvgImage } from "@/components/artifacts/svg-image";
 import type { ArtifactPartProps, VisualResult } from "@/src/core";
+import { JobsContext } from "@/components/jobs-context";
 
 /**
  * Visual artifact card (W6 → ack protocol): the tool part's output is the
@@ -36,7 +37,9 @@ export function svgNaturalWidth(svg: string): number | null {
 }
 
 export function VisualCard({ part }: ArtifactPartProps) {
+	const job = useContext(JobsContext).find(j => j.toolCallId === part.toolCallId && j.kind === "visual");
 	if (part.state !== "output-available") return null;
+	if (job?.status !== "running" && job?.result && job.delivery?.status === "pending") return <VisualOutputCard output={job.result} />;
 	return <DispatchCard toolCallId={part.toolCallId} kind="visual" />;
 }
 

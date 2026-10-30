@@ -97,7 +97,11 @@ if (process.argv.includes("--browser-service")) {
 			await app.whenReady();
 			// A hidden window keeps the app lifecycle ordinary on every
 			// platform (no window-all-closed handler is installed here).
-			const win = new BrowserWindow({ show: false });
+			const win = new BrowserWindow({
+				show: false, width: 1280, height: 1200,
+				// A hidden compositor must still paint for actual visual reviews.
+				webPreferences: { offscreen: true, backgroundThrottling: false },
+			});
 			await win.loadURL("about:blank");
 			// Window load is not a DevTools HTTP readiness barrier. Confirm the
 			// endpoint before both production and smoke clients see the handshake.
