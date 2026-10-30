@@ -11,9 +11,30 @@ import type { ManimSceneArtifact } from "../src/core/manim-scene.ts";
 import type { PiEngine } from "../src/agent/models.ts";
 
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), "learning-manim-source-"));
+const previousData = process.env.LH_DATA_DIR;
+const previousPython = process.env.LH_MANIMGX_PYTHON;
+async function resolveTestPython() {
+	const portable = path.resolve(".runtime/manimgx-portable", process.platform === "win32" ? "python.exe" : "bin/python3");
+	const candidates = previousPython ? [previousPython] : [portable, process.platform === "win32" ? "python" : "python3"];
+	for (const candidate of candidates) {
+		try {
+			const { stdout } = await promisify(execFile)(candidate, ["-I", "-c", "import sys; print(sys.executable)"], { windowsHide: true, timeout: 10_000 });
+			return stdout.trim();
+		} catch (error) {
+			if (previousPython) throw error;
+		}
+	}
+	throw new Error("Manim scene tests require Python with runtime/manimgx-requirements.txt installed. Set LH_MANIMGX_PYTHON to its executable.");
+}
+const testPython = await resolveTestPython();
 process.env.LH_DATA_DIR = directory;
+process.env.LH_MANIMGX_PYTHON = testPython;
 const { validateManimSource, manimReviewPlan } = await import("../src/server/manim-scene.ts");
-after(async () => { await fs.rm(directory, { recursive: true, force: true }); delete process.env.LH_DATA_DIR; });
+after(async () => {
+	await fs.rm(directory, { recursive: true, force: true });
+	if (previousData === undefined) delete process.env.LH_DATA_DIR; else process.env.LH_DATA_DIR = previousData;
+	if (previousPython === undefined) delete process.env.LH_MANIMGX_PYTHON; else process.env.LH_MANIMGX_PYTHON = previousPython;
+});
 const source = `import manimgx as m
 import numpy as np
 class LearningScene(m.ThreeDScene):
@@ -51,7 +72,7 @@ assert limits['memoryLimitBytes']==4*1024*1024*1024
 assert limits['cpuSecondsLimit']==120
 assert limits['peakProcessBytes']>0
 `;
-	await promisify(execFile)(path.resolve(".runtime/manimgx-portable/python.exe"), ["-I", "-c", probe, path.resolve("src/server/manim-scene-worker.py")], { windowsHide: true });
+	await promisify(execFile)(testPython, ["-I", "-c", probe, path.resolve("src/server/manim-scene-worker.py")], { windowsHide: true });
 });
 test("restricted scene language rejects filesystem, imports, reflection, typesetter file options and unbounded loops", async () => {
 	const prohibited = [
@@ -95,7 +116,7 @@ must_reject(lambda: capability(lambda **kwargs: kwargs)(alignment='left); #let f
 assert checked(chr(92)+'frac{1}{2}'+chr(92)+'sum_{i=0}^{n} x_i',latex=True)
 assert constructor(original,latex=True)(None,chr(92)+'begin{pmatrix}1 & 2 '+chr(92)+chr(92)+' 3 & 4'+chr(92)+'end{pmatrix}')
 `;
-	await promisify(execFile)(path.resolve(".runtime/manimgx-portable/python.exe"), ["-I", "-c", probe, path.resolve("src/server/manim-scene-worker.py")], { windowsHide: true });
+	await promisify(execFile)(testPython, ["-I", "-c", probe, path.resolve("src/server/manim-scene-worker.py")], { windowsHide: true });
 });
 test("separate scene stages reset numeric sampling before evaluating the source", async () => {
 	const sampleSource = `import manimgx as m
@@ -116,7 +137,7 @@ scene.construct(types.SimpleNamespace(time=0))
 `;
 	for (const [stage, priorSeed] of [["inspect", "17"], ["poster", "23"], ["render", "31"]]) {
 		const folder = path.join(directory, stage!); await fs.mkdir(folder);
-		await promisify(execFile)(path.resolve(".runtime/manimgx-portable/python.exe"), ["-I", "-c", probe, path.resolve("src/server/manim-scene-worker.py"), sourceFile, priorSeed!], { windowsHide: true, cwd: folder });
+		await promisify(execFile)(testPython, ["-I", "-c", probe, path.resolve("src/server/manim-scene-worker.py"), sourceFile, priorSeed!], { windowsHide: true, cwd: folder });
 	}
 });
 const hash="c".repeat(64);

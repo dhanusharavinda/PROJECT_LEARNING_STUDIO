@@ -1,6 +1,7 @@
 /** JS matcher + config-policy regressions; native Turbopack needs the real payload gate. */
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { describe, it } from "node:test";
 import nextConfig from "../next.config.ts";
 
@@ -31,9 +32,12 @@ describe("standalone JavaScript tracing exclusions and native workaround policy"
 		});
 	}
 	it("uses the installed Next JavaScript early-ignore function on the host platform", () => {
-		const root = process.cwd();
+		// GitHub checks out under /home/runner/work, which intentionally matches
+		// the absolute **/work/** exclusion. Test the matcher in a neutral root.
+		const root = path.join(path.parse(process.cwd()).root, "learning-studio-trace-fixture");
 		const ignore = makeIgnoreFn(root, patterns);
 		assert.equal(ignore(`${root}/data/private.json`), true);
+		assert.equal(ignore(`${root}/work/private.json`), true);
 		assert.equal(ignore(`${root}/node_modules/gcp-metadata/build/src/index.js`), false);
 	});
 	it("preserves all secret exclusions exactly", () => {

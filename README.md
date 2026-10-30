@@ -21,11 +21,11 @@ See [the Learning Studio guide](docs/learning-studio.md) for setup, animation li
 <p align="center"><strong>An agent harness for learning.</strong></p>
 
 <p align="center">
-  <a href="https://learnharness.ai">Download</a> ·
+  <a href="https://github.com/dhanusharavinda/PROJECT_LEARNING_STUDIO/releases">Download Learning Studio</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="docs/development.md">Documentation</a> ·
-  <a href="https://github.com/amosblomqvist/learnharness/issues">Issues</a> ·
-  <a href="https://discord.gg/5tCHHQEB2e">Discord</a>
+  <a href="https://github.com/dhanusharavinda/PROJECT_LEARNING_STUDIO/issues">Issues</a> ·
+  <a href="https://learnharness.ai">Original LearnHarness</a>
 </p>
 
 LearnHarness uses AI agents to plan and teach lessons from your current understanding to your goal. It builds a detailed picture of what you understand and how you reason. That picture is updated as you learn.
@@ -55,15 +55,14 @@ Future teaching sessions can read the graph instead of starting from scratch. Pr
 
 ## Download and get started
 
-**[Download from learnharness.ai](https://learnharness.ai)** · [GitHub Releases](https://github.com/amosblomqvist/learnharness/releases)
+**[Download Learning Studio for Windows](https://github.com/dhanusharavinda/PROJECT_LEARNING_STUDIO/releases)**
 
-- **macOS (Apple Silicon):** signed and notarized DMG. Drag the app to Applications.
-- **Windows (x64):** run the installer. It is currently unsigned; Windows may show an “unknown publisher” or SmartScreen warning.
-- **Linux (x64):** make the AppImage executable and open it, or install the Debian/Ubuntu `.deb`.
+- **Windows (x64):** run the Learning Studio installer. It is currently unsigned; Windows may show an “unknown publisher” or SmartScreen warning.
+- This fork currently publishes Windows installers only. The [original LearnHarness releases](https://github.com/amosblomqvist/learnharness/releases) are a separate application and do not contain the Learning Studio additions.
 
 Add your provider API key and choose your models, then start a session with what you want to understand. LearnHarness supports 30+ provider options, including OpenAI, Anthropic, Google, DeepSeek, and OpenRouter. Optional dictation and web search use separate service keys.
 
-All three platforms support in-app updates.
+Learning Studio checks its own GitHub releases under **Settings → General → Check for updates**. Older builds that used a different or disabled feed need this installer once.
 
 **Dictation:** Create a [Deepgram API key](https://console.deepgram.com/) with the **Member role or higher** ([required for token minting](https://developers.deepgram.com/reference/auth/tokens/grant)) and add it under **Settings → Providers → Dictation**. Choose the language below the key; **Multilingual** supports automatic recognition and mixed-language speech. A `403 Insufficient permissions` error during token minting can indicate an insufficient key role.
 
@@ -84,10 +83,10 @@ npm test           # deterministic, no LLM, no network
 
 See the [development guide](docs/development.md), [architecture](docs/architecture.md), and [desktop release guide](docs/desktop-release.md).
 
-Questions, bug reports, and feature requests: [GitHub Issues](https://github.com/amosblomqvist/learnharness/issues).
+Questions, bug reports, and feature requests for this fork: [Learning Studio issues](https://github.com/dhanusharavinda/PROJECT_LEARNING_STUDIO/issues). LearnHarness is created by [Amos Blomqvist](https://github.com/amosblomqvist/learnharness).
 
 ## License
 
 [AGPL-3.0](LICENSE)
 
-The app is free and open forever. If we ever charge for anything, it will be for convenience — managed keys, hosting — never for features you can run locally.
+The original LearnHarness project and this fork retain the AGPL-3.0 license. Configured external AI services may charge for usage.

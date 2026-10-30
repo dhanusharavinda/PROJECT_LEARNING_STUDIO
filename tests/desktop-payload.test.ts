@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 const source = fs.readFileSync(new URL("../scripts/build-server.mjs", import.meta.url), "utf8");
 const STANDALONE = path.join(".next", "standalone");
 const PROMPT = path.join("src", "agent", "system-prompt.md");
+const LAB_ASSETS = ["python-sandbox.html", "python-worker.mjs", "python/pyodide.asm.wasm", "python/python_stdlib.zip"].map(file => path.join("public", "lab", file));
 
 function withPayload(test: (fixture: {
 	root: string;
@@ -26,6 +27,7 @@ function withPayload(test: (fixture: {
 		write(path.join(STANDALONE, "server.js"));
 		write(path.join(".next", "static", "runtime.js"));
 		write(path.join("public", "asset.txt"));
+		for (const asset of LAB_ASSETS) write(asset);
 		write(path.join(STANDALONE, PROMPT));
 		write(path.join(STANDALONE, "src", "agent", "prompts", "teacher", "20-teaching.md"));
 		write(path.join(STANDALONE, "src", "server", "manim-scene-worker.py"));
@@ -62,6 +64,7 @@ describe("desktop standalone payload", () => {
 			for (const file of runtime) assert.ok(fs.existsSync(path.join(root, STANDALONE, file)), file);
 			assert.ok(fs.existsSync(path.join(root, STANDALONE, ".next", "static", "runtime.js")));
 			assert.ok(fs.existsSync(path.join(root, STANDALONE, "public", "asset.txt")));
+			for (const asset of LAB_ASSETS) assert.ok(fs.existsSync(path.join(root, STANDALONE, asset)), asset);
 		});
 	});
 
@@ -93,5 +96,15 @@ describe("desktop standalone payload", () => {
 			assert.equal(result.status, 1);
 			assert.match(String(result.stderr), /prompt asset missing/);
 		});
+	});
+	it("refuses each missing Lab Python runtime asset", () => {
+		for (const asset of LAB_ASSETS) {
+			withPayload(({ root, run }) => {
+				fs.rmSync(path.join(root, asset));
+				const result = run();
+				assert.equal(result.status, 1, asset);
+				assert.ok(String(result.stderr).includes(`prompt asset missing from the trace: ${asset}`));
+			});
+		}
 	});
 });

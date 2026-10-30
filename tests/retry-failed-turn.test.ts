@@ -129,6 +129,32 @@ function assertPreserved(before: LhMessage[], saved: LhMessage[]): void {
 }
 
 describe("failed-response Retry (issue #110)", () => {
+	it("failed agent construction releases lesson and update reservations while preserving durable input", async () => {
+		const { engine } = scripted([() => fauxAssistantMessage("Recovered explanation.")]);
+		const chat = createConfiguredChat("Test: constructor failure cleanup");
+		const failedStart = await turn(engine, chat.id, { type: "text", text: "Explain planet order" }, () => {
+			assert.equal(isTurnRunning(chat.id), true);
+			assert.deepEqual(prepareDesktopUpdate(), { ready: false, reason: "busy" });
+			throw new Error("synthetic construction failure");
+		});
+		assert.equal(failedStart.status, 500);
+		assert.equal(isTurnRunning(chat.id), false);
+		assert.equal(runningTurn(chat.id), undefined);
+		const saved = chatStore.getChat(chat.id)!.messages;
+		assert.equal(saved.length, 1);
+		assert.equal(saved[0]!.role, "user");
+		assert.match(JSON.stringify(saved), /Explain planet order/);
+		try { assert.deepEqual(prepareDesktopUpdate(), { ready: true }); }
+		finally { releaseDesktopUpdate(); }
+		const recovered = await turn(engine, chat.id, { type: "text", text: "Please continue" });
+		assert.equal(recovered.status, 200);
+		assert.equal(isTurnRunning(chat.id), false);
+		assertPreserved(saved, chatStore.getChat(chat.id)!.messages);
+		assert.match(JSON.stringify(chatStore.getChat(chat.id)!.messages.at(-1)), /Recovered explanation/);
+		try { assert.deepEqual(prepareDesktopUpdate(), { ready: true }); }
+		finally { releaseDesktopUpdate(); }
+	});
+
 	it("a live teacher prevents updates until settlement and a prepared update refuses a new turn", { timeout: 5000 }, async () => {
 		let finish!: () => void; let started!: () => void;
 		const waiting = new Promise<void>(resolve => { finish = resolve; });

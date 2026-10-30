@@ -13,11 +13,14 @@ const mainFile = fileURLToPath(new URL("../electron/main.cjs", import.meta.url))
 const mainSource = readFileSync(mainFile, "utf8");
 const mainRequire = createRequire(mainFile);
 
-function fixture({ packaged = true, updaterMissing = false, feed = "", dev = false, testProfile = false, testBuild = false, cacheFailure = false } = {}) {
+function fixture({ packaged = true, updaterMissing = false, feed = "", dev = false, testProfile = false, testBuild = false, checkBuild = false, cacheFailure = false } = {}) {
 	let settings: string | Error = JSON.stringify({ version: 1, general: { autoUpdate: true } });
 	const settingsReads: string[] = [];
 	const order: string[] = [];
 	const intervals: { callback: () => void; delay: number }[] = [];
+	const timers: { callback: () => void; delay: number; cancelled: boolean }[] = [];
+	const nativeUpdater = new EventEmitter();
+	let serverStarts = 0; let providerStarts = 0; let recoveryFailure = false;
 	const handles = new Map<string, (event: unknown) => unknown>();
 	const windows: FakeWindow[] = [];
 	let enumerationFails = false;
@@ -35,6 +38,8 @@ function fixture({ packaged = true, updaterMissing = false, feed = "", dev = fal
 		result: object | null = { updateInfo: { version: "0.3.7" } };
 		failure: Error | null = null;
 		downloadFailure: Error | null = null;
+		installFailure: Error | null = null;
+		silentRefusal = false;
 		async downloadUpdate() {
 			this.downloads++;
 			if (this.downloadFailure) throw this.downloadFailure;
@@ -48,7 +53,11 @@ function fixture({ packaged = true, updaterMissing = false, feed = "", dev = fal
 			if (this.result) this.emit("update-not-available", { version: "0.3.7" });
 			return Promise.resolve(this.result);
 		}
-		quitAndInstall() { order.push("install"); }
+		quitAndInstall() {
+			order.push("install");
+			if (this.installFailure) { this.emit("error", this.installFailure); return; }
+			if (!this.silentRefusal) nativeUpdater.emit("before-quit-for-update");
+		}
 	}
 	const updater = new FakeUpdater();
 	class FakeWebContents extends EventEmitter {
@@ -91,7 +100,7 @@ function fixture({ packaged = true, updaterMissing = false, feed = "", dev = fal
 		whenReady: async () => {},
 	});
 	const electron = {
-		app, BrowserWindow: FakeWindow,
+		app, BrowserWindow: FakeWindow, autoUpdater: nativeUpdater,
 		Menu: { buildFromTemplate: (value: typeof menu) => value, setApplicationMenu: (value: typeof menu) => { menu = value; } },
 		ipcMain: { on() {}, handle: (channel: string, fn: (event: unknown) => unknown) => handles.set(channel, fn) },
 		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, webRequest: { onBeforeSendHeaders() {} } } },
@@ -99,13 +108,14 @@ function fixture({ packaged = true, updaterMissing = false, feed = "", dev = fal
 	const context = createContext({
 		require: (id: string) => {
 			if (id === "electron") return electron;
+			if (id === "../package.json") return { ...mainRequire(id), upgradeCheckOnly: checkBuild };
 			if (id === "./update-test-mode.cjs") return {
 				...mainRequire(id),
 				isUpdateTestBuild: () => testBuild,
 				resolveUpdateTestProfile: () => testProfile ? { profile: "/fixture/isolated", cacheName: "fixture-isolated" } : null,
 				prepareUpdateTestCache: () => { if (cacheFailure) throw new Error("fixture cache failure"); return "/fixture/isolated/update-test-config.yml"; },
 			};
-			if (id === "./chatgpt.cjs") return { createChatGPT: () => ({ close() {}, pause() {}, resume() {} }), fileStore: () => ({}) };
+			if (id === "./chatgpt.cjs") return { createChatGPT: () => { providerStarts++; return { close() {}, pause() {}, resume() {} }; }, fileStore: () => ({}) };
 			if (id === "./subscriptions.cjs") return { createSubscriptions: () => ({ ready: Promise.resolve(), close() {}, pause() {}, resume() {} }), loadSubscriptionSDK: () => ({}) };
 			if (id === "electron-updater") {
 				if (updaterMissing) throw new Error("missing updater");
@@ -129,14 +139,18 @@ function fixture({ packaged = true, updaterMissing = false, feed = "", dev = fal
 			return { ok: true, json: async () => readiness };
 		},
 		setInterval: (callback: () => void, delay: number) => intervals.push({ callback, delay }),
-		setTimeout() {},
+		setTimeout: (callback: () => void, delay: number) => { const timer = { callback, delay, cancelled: false }; timers.push(timer); return timer; },
+		clearTimeout: (timer?: { cancelled: boolean }) => { if (timer) timer.cancelled = true; },
+		fixtureStartServer: () => { serverStarts++; if (serverStarts > 1) { order.push("restart-server"); if (recoveryFailure) throw new Error("fixture recovery failure"); } },
 		fixtureChild: { kill: (signal: string) => order.push(signal) },
 	});
 	runInContext(mainSource, context, { filename: mainFile });
 	const run = (code: string) => runInContext(code, context);
-	run('freePort = async () => 9000; startServer = async () => { serverProcess = fixtureChild; }; waitUntilUp = async () => {};');
+	run('freePort = async () => 9000; startServer = async () => { fixtureStartServer(); serverProcess = fixtureChild; }; waitUntilUp = async () => {};');
 	return {
 		run, updater, windows, intervals, handles, settingsReads, order, app, readinessRequests,
+		timers, nativeUpdater, starts: () => ({ server: serverStarts, providers: providerStarts }),
+		failRecovery: () => { recoveryFailure = true; },
 		setReadiness: (value: typeof readiness) => { readiness = value; },
 		setSettings: (value: unknown) => { settings = JSON.stringify(value); },
 		setSettingsFailure: (value: string | Error) => { settings = value; },
@@ -334,6 +348,10 @@ describe("startup, timer, trusted IPC and menu wiring", () => {
 });
 
 describe("explicit update actions and protected restart", () => {
+	it("a lower-version production check package refuses to launch without its guarded profile", () => {
+		assert.throws(() => fixture({ checkBuild: true }), /marked check-only profile/);
+		assert.doesNotThrow(() => fixture({ checkBuild: true, testProfile: true }));
+	});
 	it("a production check-only profile isolates cache and cannot reach readiness, shutdown or install", async () => {
 		const f = fixture({ testProfile: true }); await f.run("main()");
 		assert.equal(f.app.getPath(), "/fixture/isolated");
@@ -437,6 +455,37 @@ describe("explicit update actions and protected restart", () => {
 		await f.run("installUpdateNow()");
 		assert.deepEqual(f.order, ["prepare", "release"]);
 		assert.equal(f.state().status, "downloaded"); assert.equal(f.state().actionError, "readiness");
+	});
+
+	it("a refused installer that emits error and returns normally restores the app and permits retry", async () => {
+		const f = fixture(); await f.run("main()"); f.updater.emit("update-downloaded", { version: "0.5.1" });
+		f.updater.installFailure = new Error("private installer failure");
+		await f.run("installUpdateNow()");
+		assert.deepEqual(f.order, ["prepare", "SIGTERM", "install", "restart-server"]);
+		assert.deepEqual(f.starts(), { server: 2, providers: 2 });
+		assert.equal(f.state().actionError, "readiness"); assert.equal(f.run("installInFlight"), false);
+		assert.ok(!JSON.stringify(f.state()).includes("private"));
+		assert.equal(f.nativeUpdater.listenerCount("before-quit-for-update"), 0);
+		f.updater.installFailure = null; await f.run("installUpdateNow()");
+		assert.deepEqual(f.order.slice(-3), ["prepare", "SIGTERM", "install"]);
+		assert.equal(f.run("installInFlight"), true);
+	});
+
+	it("a silent updater refusal times out and restores the server instead of assuming handoff", async () => {
+		const f = fixture(); await f.run("main()"); f.updater.emit("update-downloaded", { version: "0.5.1" }); f.updater.silentRefusal = true;
+		const pending = f.run("installUpdateNow()");
+		await new Promise(resolve => setImmediate(resolve));
+		const timer = f.timers.find(timer => timer.delay === 5000 && !timer.cancelled); assert.ok(timer); timer.callback();
+		await pending;
+		assert.equal(f.starts().server, 2); assert.equal(f.run("installInFlight"), false);
+		assert.equal(f.state().actionError, "readiness");
+	});
+
+	it("failed server recovery is surfaced explicitly and does not leave install permanently in flight", async () => {
+		const f = fixture(); await f.run("main()"); f.updater.emit("update-downloaded", { version: "0.5.1" });
+		f.updater.installFailure = new Error("fixture installer refused"); f.failRecovery();
+		await f.run("installUpdateNow()");
+		assert.equal(f.state().actionError, "recovery"); assert.equal(f.run("installInFlight"), false);
 	});
 
 	it("an installation already handed to the updater cannot be launched twice", async () => {

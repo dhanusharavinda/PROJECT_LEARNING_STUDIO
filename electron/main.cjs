@@ -247,8 +247,12 @@ function startServer(port) {
 		const fwd = (buf) => buf.toString().trimEnd().split("\n").forEach((l) => l && log(`server: ${l}`));
 		child.stdout.on("data", fwd);
 		child.stderr.on("data", fwd);
+		child.once("error", reject);
 		child.on("exit", (code, signal) => {
 			log(`server exited (code=${code} signal=${signal})`);
+			// A stopped child may report exit after update-failure recovery has
+			// already created its replacement. Never close the new connections.
+			if (serverProcess !== child) return;
 			serverProcess = null;
 			chatgptChild?.dispose();
 			chatgptChild = null;
@@ -531,6 +535,51 @@ async function updateReadiness(op) {
 	return response.json();
 }
 
+async function createProviderConnections() {
+	chatgptChild?.dispose(); chatgptChild = null;
+	subscriptionChild?.dispose(); subscriptionChild = null;
+	chatgpt?.close(); subscriptions?.close();
+	chatgpt = createChatGPT({
+		store: fileStore(path.join(app.getPath("userData"), "chatgpt-credentials.json")),
+		openExternal: (target) => shell.openExternal(target),
+		onChange: (value) => {
+			chatgptChild?.send(value);
+			for (const win of BrowserWindow.getAllWindows()) win.webContents.send("lh:chatgpt:changed");
+		},
+	});
+	subscriptions = createSubscriptions({
+		directory: app.getPath("userData"),
+		loadSDK: () => loadSubscriptionSDK(path.dirname(serverEntry())),
+		openExternal: (target) => shell.openExternal(target),
+		onChange: (snapshot) => {
+			subscriptionChild?.send(snapshot);
+			for (const win of BrowserWindow.getAllWindows()) win.webContents.send("lh:subscriptions:changed");
+		},
+	});
+	await subscriptions.ready;
+}
+
+/** quitAndInstall returns void even when installation is refused. Its native
+ * event confirms handoff; an error or missing event means the app must recover. */
+function requestUpdaterInstall() {
+	return new Promise((resolve, reject) => {
+		const nativeUpdater = require("electron").autoUpdater;
+		let timer;
+		const cleanup = () => {
+			clearTimeout(timer);
+			nativeUpdater.removeListener("before-quit-for-update", ready);
+			autoUpdater.removeListener("error", failed);
+		};
+		const ready = () => { cleanup(); resolve(); };
+		const failed = (error) => { cleanup(); reject(error); };
+		nativeUpdater.once("before-quit-for-update", ready);
+		autoUpdater.once("error", failed);
+		timer = setTimeout(() => failed(new Error("Updater did not confirm installation handoff")), 5000);
+		try { autoUpdater.quitAndInstall(false, true); }
+		catch (error) { failed(error); }
+	});
+}
+
 async function installUpdateNow() {
 	if (!autoUpdater || !downloadedUpdateVersion || installInFlight) return;
 	if (UPDATE_TEST_PROFILE) {
@@ -540,6 +589,7 @@ async function installUpdateNow() {
 	installInFlight = true;
 	let prepared = false;
 	let handedOff = false;
+	let serverStopped = false;
 	try {
 		// The owned server checks all teaching and rendering work, then blocks
 		// new work atomically until installation or an explicit release.
@@ -551,12 +601,23 @@ async function installUpdateNow() {
 		prepared = true;
 		reportUpdateStatus("downloaded", downloadedUpdateVersion);
 		killServer({ strict: true });
-		autoUpdater.quitAndInstall(false, true);
+		serverStopped = true;
+		await requestUpdaterInstall();
 		handedOff = true;
 	} catch (error) {
 		log(`update installation failed: ${error?.message ?? error}`);
-		reportUpdateStatus("downloaded", downloadedUpdateVersion, { actionError: "readiness" });
-		if (prepared) await updateReadiness("release").catch(() => {});
+		let recoveryFailed = false;
+		if (serverStopped) {
+			try {
+				await createProviderConnections();
+				await startServer(new URL(updateServerOrigin).port);
+				await waitUntilUp(updateServerOrigin);
+			} catch (recoveryError) {
+				recoveryFailed = true;
+				log(`server recovery after refused update failed: ${recoveryError?.message ?? recoveryError}`);
+			}
+		} else if (prepared) await updateReadiness("release").catch(() => {});
+		reportUpdateStatus("downloaded", downloadedUpdateVersion, { actionError: recoveryFailed ? "recovery" : "readiness" });
 	} finally {
 		if (!handedOff) installInFlight = false;
 	}
@@ -594,7 +655,6 @@ function setupAutoUpdater() {
 			return;
 		}
 	}
-	autoUpdater.setFeedURL(feed);
 	if (UPDATE_TEST_PROFILE) {
 		try { autoUpdater.updateConfigPath = prepareUpdateTestCache(UPDATE_TEST_PROFILE, path.join(process.resourcesPath, "app-update.yml")); }
 		catch (error) {
@@ -604,6 +664,8 @@ function setupAutoUpdater() {
 			return;
 		}
 	}
+	// updateConfigPath resets the provider. Apply the explicit feed after it.
+	autoUpdater.setFeedURL(feed);
 	autoUpdater.allowPrerelease = false;
 	autoUpdater.autoDownload = false;
 	autoUpdater.autoInstallOnAppQuit = false;
@@ -751,24 +813,7 @@ async function main() {
 		session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["<all_urls>"] }, (details, callback) => {
 			callback({ requestHeaders: desktopAPIHeaders(details, ownedOrigin, desktopAPISecret, [...trustedAppWindows]) });
 		});
-		chatgpt = createChatGPT({
-			store: fileStore(path.join(app.getPath("userData"), "chatgpt-credentials.json")),
-			openExternal: (target) => shell.openExternal(target),
-			onChange: (value) => {
-				chatgptChild?.send(value);
-				for (const win of BrowserWindow.getAllWindows()) win.webContents.send("lh:chatgpt:changed");
-			},
-		});
-		subscriptions = createSubscriptions({
-			directory: app.getPath("userData"),
-			loadSDK: () => loadSubscriptionSDK(path.dirname(serverEntry())),
-			openExternal: (target) => shell.openExternal(target),
-			onChange: (snapshot) => {
-				subscriptionChild?.send(snapshot);
-				for (const win of BrowserWindow.getAllWindows()) win.webContents.send("lh:subscriptions:changed");
-			},
-		});
-		await subscriptions.ready;
+		await createProviderConnections();
 		log(`starting server: ${serverEntry()}`);
 		log(`data dir: ${DATA_DIR()}${fs.existsSync(AUTH_FILE()) ? " · auth.json: present" : " · auth.json: ABSENT (no BYOK keys yet)"}`);
 		await startServer(new URL(url).port);

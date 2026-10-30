@@ -12,7 +12,7 @@ export type UpdateState = {
 	version: string | null;
 	revision: number;
 	progress?: number | null;
-	actionError?: "download" | "busy" | "readiness" | "test-profile" | null;
+	actionError?: "download" | "busy" | "readiness" | "recovery" | "test-profile" | null;
 };
 
 export const APP_VERSION = process.env.LH_VERSION ?? "";
@@ -48,6 +48,7 @@ export function useUpdateState() {
 }
 
 export function updateStatusText(state: UpdateState | null): string | null {
+	if (state?.actionError === "recovery") return "The update did not start and the local server could not restart. Close and reopen Learning Studio.";
 	if (state?.actionError === "test-profile") return "Installation is disabled in this isolated update-check profile.";
 	if (state?.actionError === "busy") return "Finish or stop active lessons and renders before restarting. Your update is still ready.";
 	if (state?.actionError === "readiness") return "Couldn’t confirm that it is safe to restart. Try again after active work finishes.";
